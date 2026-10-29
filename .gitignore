@@ -1,0 +1,27 @@
+node_modules/
+desktop/node_modules/
+desktop/.evs-venv/
+desktop/*-diagnostics.json
+desktop/drm-check-result.txt
+desktop/vmp-check-result.json
+standalone/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Local credentials, application state and generated analysis
+data/
+.agents/
+.vscode/
+graphify-out/
+spotify_embed.html
+spotify_full.html
+spotify_sample.html
+*.pem
+*.key
+.secret-key
+secrets.json

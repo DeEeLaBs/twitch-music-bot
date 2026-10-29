@@ -1,0 +1,16 @@
+MUSICBOT V3 - START
+===================
+
+1. ZIP vollständig entpacken.
+2. Im Hauptordner auf "MusicBot starten.cmd" doppelklicken.
+3. Der Starter startet zuerst den Bot-Server und öffnet danach die Desktop-Oberfläche.
+4. Beim ersten Start oder nach einem Update kann der automatische Build etwas dauern.
+
+Der Bot öffnet standardmäßig das Dashboard. YouTube Music steht als eigener Desktop-Tab bereit;
+Spotify Premium ist direkt als Tab im Dashboard integriert.
+
+Wenn der Start fehlschlägt, stehen die technischen Details in:
+  data\server-stderr.log
+  data\server-stdout.log
+
+Keine PowerShell-Eingabe notwendig.

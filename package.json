@@ -1,0 +1,51 @@
+{
+  "name": "twitch-music-bot",
+  "private": true,
+  "version": "1.8.5",
+  "type": "module",
+  "scripts": {
+    "build:standalone": "node scripts/build-standalone.cjs",
+    "dev": "tsx watch --exclude data --exclude dist server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs && node scripts/verify-build.cjs && node -e \"require('fs').writeFileSync('dist/build-version.txt', require('./package.json').version)\"",
+    "start": "node scripts/start.cjs",
+    "preview": "vite preview",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true}); require('fs').rmSync('server.js',{force:true})\"",
+    "lint": "tsc --noEmit",
+    "desktop": "node scripts/desktop.cjs",
+    "desktop:install": "npm --prefix desktop install",
+    "check:desktop": "node --check desktop/main.cjs && node --check desktop/preload.cjs && node --check desktop/playerPreload.cjs && node --check desktop/drm.cjs && node --check desktop/check-drm.cjs",
+    "test:desktop": "node --test desktop/providers.test.cjs desktop/drm.test.cjs desktop/googleAuth.test.cjs desktop/playerExecution.test.cjs desktop/youtubeMetadata.test.cjs",
+    "test": "node --experimental-strip-types --test tests/*.test.ts && npm run test:desktop",
+    "test:smoke": "node scripts/smoke-test.cjs",
+    "benchmark:players": "node scripts/benchmark-coldstart.cjs",
+    "clean:logs": "node -e \"const fs=require('fs'),p=require('path');['electron-console.log','electron-crash.log','bot.log','server-stdout.log','login-diagnostics.log'].forEach(f=>{try{fs.writeFileSync(p.join('data',f),'')}catch{}});console.log('Logs erfolgreich bereinigt.');\""
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "socket.io-client": "^4.8.3",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/react-test-renderer": "^19.3.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.0.4",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.25.0",
+    "react-test-renderer": "^19.0.1",
+    "tailwindcss": "^4.1.14",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

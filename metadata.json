@@ -1,0 +1,11 @@
+{
+  "name": "Twitch YTM Song Request Bot",
+  "description": "Local Twitch song-request bot for YouTube Music Desktop App with moderated queue, Channel Points integration, diagnostics and OBS overlays.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "TWITCH_CHAT",
+    "YOUTUBE_MUSIC_COMPANION",
+    "OBS_BROWSER_OVERLAY",
+    "SPOTIFY_PREMIUM_CONNECT"
+  ]
+}

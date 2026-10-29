@@ -9,9 +9,31 @@ import { StreamPlaylistService } from '../src/server/streamPlaylistService.ts';
 import { QueueManager } from '../src/server/queueManager.ts';
 import type { YtmCompanionClient } from '../src/server/ytmCompanion.ts';
 import type { BotConfig, Requester, Track } from '../src/types.ts';
+import { CountdownService } from '../src/server/countdownService.ts';
 
 const viewer: Requester = { username: 'viewer', displayName: 'Viewer', badge: 'viewer' };
 const mod: Requester = { username: 'mod', displayName: 'Mod', badge: 'moderator' };
+
+test('timer dispatch respects menu permissions, disabled state and cooldown without granting viewers access', async t => {
+  let dispatched = 0;
+  t.mock.method(CountdownService.prototype, 'chat', () => { dispatched++; return 'Timer updated'; });
+  const { bot } = harness();
+  const config = (bot as unknown as { config: BotConfig }).config;
+  config.commandPermissions = { timer: [] };
+  await bot.processCommandOrChat(mod, '!timer subathon pause');
+  assert.equal(dispatched, 0);
+  config.commandPermissions = { timer: ['viewer'] };
+  await bot.processCommandOrChat(viewer, '!timer subathon pause');
+  assert.equal(dispatched, 0);
+  config.commandPermissions = { timer: ['broadcaster'] };
+  await bot.processCommandOrChat(mod, '!timer subathon pause');
+  assert.equal(dispatched, 0);
+  config.commandPermissions = { timer: ['moderator', 'broadcaster'] };
+  config.commandCooldowns = { timer: 60 };
+  await bot.processCommandOrChat(mod, '!timer subathon pause');
+  await bot.processCommandOrChat(mod, '!timer subathon resume');
+  assert.equal(dispatched, 1);
+});
 
 function harness(playbackProvider: 'youtube_music' | 'spotify' = 'youtube_music') {
   const messages: string[] = [];

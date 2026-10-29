@@ -4,7 +4,8 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { writeJson } from './atomicStore.ts';
 
-type SecretKey = 'twitchBotOauthToken' | 'twitchRefreshToken' | 'twitchTokenExpiresAt' | 'twitchClientSecret' | 'ytmdaAuthToken' | 'spotifyRefreshToken';
+type SecretKey = 'twitchBotOauthToken' | 'twitchRefreshToken' | 'twitchTokenExpiresAt' | 'twitchClientSecret' | 'ytmdaAuthToken' | 'spotifyRefreshToken'
+  | 'streamelementsCountdownToken' | 'streamlabsCountdownToken' | 'tipeeestreamCountdownToken';
 type SecretMode = 'dpapi' | 'local-aes';
 interface StoredSecret { mode: SecretMode; value: string; }
 interface SecretFileV2 { version: 2; values: Partial<Record<SecretKey, StoredSecret>>; }

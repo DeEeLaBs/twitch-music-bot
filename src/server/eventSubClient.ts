@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
-import { alertFromNotification, eventSubSubscriptions, type StreamAlert } from '../streamAlerts.ts';
+import { alertFromNotification, countdownBonusFromNotification, eventSubSubscriptions, type StreamAlert } from '../streamAlerts.ts';
+import type { CountdownBonus } from '../countdown.ts';
 
 interface EventAuth {
   token: string;
@@ -16,10 +17,12 @@ export class EventSubClient {
 
   private readonly onAlert: (alert: StreamAlert) => void;
   private readonly log: (message: string) => void;
+  private readonly onBonus: (bonus: CountdownBonus) => void;
 
-  constructor(onAlert: (alert: StreamAlert) => void, log: (message: string) => void) {
+  constructor(onAlert: (alert: StreamAlert) => void, log: (message: string) => void, onBonus: (bonus: CountdownBonus) => void = () => {}) {
     this.onAlert = onAlert;
     this.log = log;
+    this.onBonus = onBonus;
   }
 
   start(auth: EventAuth) {
@@ -42,7 +45,7 @@ export class EventSubClient {
     this.socket = socket;
     if (previous && previous !== socket) previous.close();
     socket.on('message', raw => {
-      void this.onMessage(String(raw), auth, subscribe, socket);
+      void this.onMessage(String(raw), auth, subscribe, socket).catch(() => this.log('EventSub-Ereignis konnte nicht verarbeitet werden.'));
     });
     socket.on('close', () => {
       if (this.socket !== socket || this.stopped) return;
@@ -65,6 +68,8 @@ export class EventSubClient {
     } else if (type === 'session_reconnect' && session?.reconnect_url) {
       this.open(session.reconnect_url, auth, false);
     } else if (type === 'notification') {
+      const bonus = countdownBonusFromNotification(message);
+      if (bonus) this.onBonus(bonus);
       const alert = alertFromNotification(message);
       if (alert) this.onAlert(alert);
     } else if (type === 'session_keepalive') {

@@ -45,6 +45,17 @@ export const requestsAreOpen = (state: BotState) => state.config.songRequestsOpe
 export const autoplayIsOn = (state: BotState) => state.config.autoPlayRadio !== false;
 
 export const ACTIONS: ActionDefinition[] = [
+  ...(['streamstart', 'subathon'] as const).flatMap(profile => [
+    ...(['start', 'pause', 'resume', 'reset'] as const).map(action => ({
+      id: `timer-${profile}-${action}`, name: `${profile === 'streamstart' ? 'Streamstart' : 'Subathon'}: ${action}`, tier: 3 as const,
+      confirm: action === 'reset',
+      run: async (client: CommandClient) => fromResult(await client.post(`/api/countdowns/${profile}/control`, { action }))
+    })),
+    ...([60, -60] as const).map(seconds => ({
+      id: `timer-${profile}-${seconds > 0 ? 'plus' : 'minus'}`, name: `${profile === 'streamstart' ? 'Streamstart' : 'Subathon'}: ${seconds > 0 ? '+' : '-'}1 min`, tier: 3 as const,
+      run: async (client: CommandClient) => fromResult(await client.post(`/api/countdowns/${profile}/control`, { action: 'add', seconds }))
+    }))
+  ]),
   // Tier 1: playback
   simple('play-pause', 'Play / Pause', 1, '/api/playback/play-pause'),
   simple('next', 'Next song', 1, '/api/playback/skip'),

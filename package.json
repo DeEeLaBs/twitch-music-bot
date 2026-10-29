@@ -1,7 +1,7 @@
 {
   "name": "twitch-music-bot",
   "private": true,
-  "version": "1.8.5",
+  "version": "1.9.0",
   "type": "module",
   "scripts": {
     "build:standalone": "node scripts/build-standalone.cjs",

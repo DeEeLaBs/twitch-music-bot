@@ -10,6 +10,7 @@ import { botEvents } from './eventBus.ts';
 import { chatLanguage, localizeCompanionError, twitchMessage } from './twitchMessages.ts';
 import { commandDefaultAllows, parseCommand } from './commandRegistry.ts';
 import { StreamPlaylistService } from './streamPlaylistService.ts';
+import { getCountdownService } from './countdownService.ts';
 
 export type LogCallback = (log: BotLog) => void;
 
@@ -371,7 +372,7 @@ export class TwitchBot {
     return commandDefaultAllows(parsed.definition, badge);
   }
   private passCooldown(command: string, requester: Requester): boolean {
-    if (requester.badge === 'broadcaster' || requester.badge === 'moderator') {
+    if (command !== 'timer' && (requester.badge === 'broadcaster' || requester.badge === 'moderator')) {
       return true;
     }
     const seconds = this.config.commandCooldowns?.[command] ?? (command === 'sr' ? (this.config.requestCooldownSeconds ?? 10) : 0);
@@ -412,6 +413,13 @@ export class TwitchBot {
       return;
     }
     if (command && !this.passCooldown(command, requester)) return;
+
+    if (command === 'timer') {
+      if (requester.badge !== 'moderator' && requester.badge !== 'broadcaster') return;
+      const reply = getCountdownService().chat(cleanMsg, true);
+      if (reply) this.sendMessage(reply);
+      return;
+    }
 
     if (command === 'wrongsong') {
       let result: ReturnType<QueueManager['withdrawLatestRequest']>;

@@ -8,6 +8,7 @@ import fs from 'node:fs/promises';
 import { createApiRouter } from '../src/server/apiRouter.ts';
 import { errorPayload } from '../src/server/errors.ts';
 import { botService } from '../src/server/botService.ts';
+import { defaultCountdown } from '../src/countdown.ts';
 
 async function withApi(run: (baseUrl: string, sessionToken: string) => Promise<void>) {
   const sessionToken = 'test-session-token';
@@ -189,4 +190,35 @@ test('Stream Deck routes report status and refuse installs without a valid sessi
     assert.equal(denied.status, 403);
     assert.equal((await denied.json() as { code: string }).code, 'AUTH_REQUIRED');
   });
+});
+
+test('countdown HTTP controls validate inputs, require sessions and never disclose provider tokens', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'countdown-api-'));
+  const previous = process.cwd(); process.chdir(directory);
+  t.mock.method(botService, 'overlayTokenMatches', (value: string) => value === 'qa-overlay');
+  try {
+    await withApi(async (base, session) => {
+      const post = (route: string, body: unknown, auth = true) => fetch(`${base}/api${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(auth ? { 'X-Bot-Session': session } : {}) }, body: JSON.stringify(body) });
+      assert.equal((await post('/countdowns/subathon/control', { action: 'start' }, false)).status, 403);
+      assert.equal((await post('/countdowns/not-a-profile/control', { action: 'start' })).status, 400);
+      assert.equal((await post('/countdowns/subathon/control', { action: 'execute' })).status, 400);
+      const profile = defaultCountdown('subathon'); profile.initialSeconds = 100;
+      assert.equal((await post('/countdowns/subathon/config', profile)).status, 200);
+      assert.equal((await post('/countdowns/subathon/control', { action: 'start' })).status, 200);
+      assert.equal((await post('/countdowns/subathon/control', { action: 'add', seconds: '100' })).status, 400);
+      const paused = await post('/countdowns/subathon/control', { action: 'pause' });
+      assert.equal((await paused.json()).runs.subathon.status, 'paused');
+      assert.equal((await fetch(`${base}/api/countdowns/overlay/subathon?token=invalid`)).status, 403);
+      assert.equal((await fetch(`${base}/api/countdowns/overlay/no-profile?token=qa-overlay`)).status, 400);
+      const overlay = await fetch(`${base}/api/countdowns/overlay/subathon?token=qa-overlay`);
+      assert.equal(overlay.status, 200); assert.equal((await overlay.json()).profile.id, 'subathon');
+      const token = 'synthetic-provider-token';
+      const saved = await post('/countdowns/connections/streamlabs', { enabled: false, channel: '', username: '', token });
+      assert.equal(saved.status, 200); assert.doesNotMatch(await saved.text(), new RegExp(token));
+      const connections = await fetch(`${base}/api/countdowns/connections`);
+      const snapshot = await connections.text(); assert.doesNotMatch(snapshot, new RegExp(token));
+      assert.equal(JSON.parse(snapshot).streamlabs.configured, true);
+      assert.doesNotMatch(await fs.readFile(path.join(directory, 'data/secrets.json'), 'utf8'), new RegExp(token));
+    });
+  } finally { process.chdir(previous); await fs.rm(directory, { recursive: true, force: true }); }
 });

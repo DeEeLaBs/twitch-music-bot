@@ -11,6 +11,11 @@ test('command registry resolves aliases, args and default permissions', () => {
   const skip = parseCommand('!skip')!;
   assert.equal(commandDefaultAllows(skip.definition, 'viewer'), false);
   assert.equal(commandDefaultAllows(skip.definition, 'moderator'), true);
+  const timer = parseCommand('!timer subathon add 300')!;
+  assert.equal(timer.definition.name, 'timer');
+  assert.equal(timer.args, 'subathon add 300');
+  assert.equal(commandDefaultAllows(timer.definition, 'viewer'), false);
+  assert.equal(commandDefaultAllows(timer.definition, 'moderator'), true);
 });
 
 test('twitch chat i18n keeps command/runtime responses language-aware', () => {

@@ -144,3 +144,11 @@ Bei einem fehlgeschlagenen Start stehen die Prozessausgaben unter `data/server-s
 
 ## Stream Deck
 Das Setup enthält die Karte **Elgato Stream Deck**: Ein Klick öffnet das mitgelieferte Plugin in der Stream-Deck-App (diese fragt nach der Bestätigung); bei einer neueren Plugin-Version erscheint „Update verfügbar“. Das Plugin wird mit `npm run streamdeck:pack` bzw. automatisch von `npm run build:standalone` gebaut. Details: `streamdeck-plugin/README.md`.
+
+## Countdown Studio
+
+Der neue Dashboard-Bereich **Countdown** verwaltet Streamstart und Subathon mit
+eigenen OBS-Links, Zeitboni, Pausen, Zeitgrenzen und Abschlussaktionen. Subs,
+Geschenk-Abos, Bits, Kanalpunkte und Spenden über StreamElements, Streamlabs und
+TipeeeStream können die Zeit verlängern. Regeln, Anbieter und Gestaltung werden
+im Menü eingestellt. Anleitung und Grenzen: [docs/COUNTDOWN.md](docs/COUNTDOWN.md).

@@ -79,6 +79,7 @@ const COMMAND_METADATA: Record<CommandName, {
   descEn: string;
   icon: typeof MessageSquare;
 }> = {
+  timer: { category: 'moderation', descDe: 'Countdown: Streamstart und Subathon starten, pausieren, fortsetzen oder Zeit ändern.', descEn: 'Countdown: Start, pause, resume or adjust streamstart and subathon timers.', icon: Clock },
   streamplaylist: { category: 'moderation', descDe: 'Aktuellen Song speichern; !playlist link zeigt den Link.', descEn: 'Save current track; !playlist link shows the link.', icon: ListMusic },
   wrongsong: { category: 'playback', descDe: 'Eigenen letzten Songwunsch innerhalb von 60 Sekunden zurückziehen.', descEn: 'Withdraw your latest pending request within 60 seconds.', icon: ListMusic },
   sr: {
@@ -572,7 +573,7 @@ export const CommandRulesStudio: React.FC<CommandRulesStudioProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredCommands.map(cmd => {
               const meta = COMMAND_METADATA[cmd.name];
-              const currentRoles = commandPermissions[cmd.name];
+              const currentRoles = cmd.name === 'timer' ? commandPermissions.timer?.filter(role => role === 'moderator' || role === 'broadcaster') : commandPermissions[cmd.name];
               const presetKey = resolvePresetKey(currentRoles, cmd.defaultPermissions);
               const currentPreset = PERMISSION_PRESETS[presetKey];
               const cooldown = commandCooldowns[cmd.name] ?? (cmd.name === 'sr' ? requestCooldownSeconds : (cmd.defaultCooldownSeconds ?? 0));
@@ -606,6 +607,11 @@ export const CommandRulesStudio: React.FC<CommandRulesStudioProps> = ({
                     <p className="text-xs text-neutral-400 mb-4 min-h-[32px] line-clamp-2">
                       {isDe ? meta.descDe : meta.descEn}
                     </p>
+                    {cmd.name === 'timer' && <div className="text-xs text-neutral-400 mb-4 space-y-2">
+                      <p className="font-mono break-words">!timer streamstart|subathon start|pause|resume|reset</p>
+                      <p className="font-mono break-words">!timer subathon add 300<br />!timer subathon add -60</p>
+                      <p>{isDe ? 'add 300 fügt 5 Minuten hinzu; add -60 zieht 1 Minute ab. Einstellungen und OBS-Links findest du im Countdown-Menü.' : 'add 300 adds 5 minutes; add -60 removes 1 minute. Settings and OBS links are in the Countdown menu.'}</p>
+                    </div>}
                   </div>
 
                   <div className="space-y-3 pt-3 border-t border-neutral-800/60">
@@ -625,7 +631,7 @@ export const CommandRulesStudio: React.FC<CommandRulesStudioProps> = ({
                         }}
                         className="w-full bg-neutral-900 border border-neutral-700/80 rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-purple-500 cursor-pointer"
                       >
-                        {Object.entries(PERMISSION_PRESETS).map(([key, preset]) => (
+                        {Object.entries(PERMISSION_PRESETS).filter(([key]) => cmd.name !== 'timer' || ['mod', 'broadcaster', 'disabled'].includes(key)).map(([key, preset]) => (
                           <option key={key} value={key}>
                             {isDe ? preset.labelDe : preset.labelEn}
                           </option>

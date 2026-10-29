@@ -1,3 +1,14 @@
+# v1.9.0
+
+- Neues Countdown Studio für Streamstart und Subathons mit eigenen OBS-Links und frei einstellbarer Gestaltung.
+- Zeitboni für Subs nach Tier, Geschenk-Abos, Bits, Kanalpunkte sowie Spenden von StreamElements, Streamlabs und TipeeeStream.
+- Pausieren, Neustart-Wiederherstellung, maximale Restzeit und feste Endzeitpunkte.
+- Einmalige Abschlussaktionen: Sound, Alert, Chatnachricht, Ausblenden und optionales Folgeprofil.
+- Eigene Countdown-Schriften als TTF, OTF, WOFF oder WOFF2; Vorschau und OBS laden sie lokal vom Bot.
+- `!timer` im Commands-Menü mit Berechtigungen, Cooldown, Syntax und Beispielen.
+- Stream-Deck-Plugin 1.1.0 mit Countdown-Steuerung für beide Profile.
+- Anbieter-Tokens bleiben verschlüsselt auf dem Rechner. Echte Spendenverbindungen erfordern eigene Tokens; Offline-Ereignisse werden nicht historisch nachgeladen.
+
 # v1.8.2
 
 - YouTube-Requests mit aktivem Autoplay Radio starten über die kanonische Radio-Playlist-URL. Dadurch ist nach einem aus Spotify zugeordneten Titel ein nächster Radio-Song verfügbar; Skip meldet einen Fehler, wenn der Player tatsächlich keinen nächsten Titel hat.

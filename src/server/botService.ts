@@ -26,6 +26,8 @@ import { getGlobalChatBadges } from './globalBadges.ts';
 import { getStreamerAvatar } from './streamerAvatarService.ts';
 import { StreamPlaylistService } from './streamPlaylistService.ts';
 import { getStreamStats, setStreamTimer, startStreamAlerts } from './alertService.ts';
+import { getCountdownService, stopCountdownService } from './countdownService.ts';
+import { getCountdownDonations, stopCountdownDonations } from './countdownDonations.ts';
 
 try { process.loadEnvFile?.(); } catch {}
 
@@ -265,6 +267,10 @@ export class BotService {
       getQueue: () => this.queueManager.getQueue(),
       send: message => this.sendWidgets(message)
     });
+    getCountdownService().start(profile => {
+      if (profile.finish.chatEnabled && profile.finish.chatMessage) this.twitchBot.sendMessage(profile.finish.chatMessage);
+    });
+    getCountdownDonations().start();
     void this.refreshEmotes();
     if (!this.emoteTimer) {
       this.emoteTimer = setInterval(() => void this.refreshEmotes(), 10 * 60 * 1000);
@@ -604,6 +610,8 @@ export class BotService {
   }
 
   public shutdown() {
+    stopCountdownService();
+    stopCountdownDonations();
     this.configService.save();
     this.spotifyService.stop();
     if (this.twitchRefreshTimer) clearInterval(this.twitchRefreshTimer);

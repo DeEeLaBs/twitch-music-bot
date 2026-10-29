@@ -6,6 +6,7 @@ import { botEvents } from './eventBus.ts';
 import { EventSubClient } from './eventSubClient.ts';
 import { applyAlert, emptyStats, normalizeStats, noteRequester, noteViewers, setGoal, type StreamStats } from '../streamStats.ts';
 import type { StreamAlert } from '../streamAlerts.ts';
+import { getCountdownService } from './countdownService.ts';
 
 interface AlertHost {
   getConfig: () => BotConfig;
@@ -89,7 +90,7 @@ async function connect(getConfig: () => BotConfig) {
     console.info('[EventSub] Waiting for a broadcaster Twitch login with the alert scopes.');
     return;
   }
-  client = new EventSubClient(accept, message => console.info(`[EventSub] ${message}`));
+  client = new EventSubClient(accept, message => console.info(`[EventSub] ${message}`), bonus => { getCountdownService().accept(bonus); });
   client.start(auth);
 }
 

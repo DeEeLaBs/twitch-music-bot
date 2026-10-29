@@ -22,6 +22,8 @@ const SetupGuide = lazy(() => import('./components/SetupGuide.tsx').then(m=>({de
 const DiagnosticsPanel = lazy(() => import('./components/DiagnosticsPanel.tsx').then(m=>({default:m.DiagnosticsPanel})));
 const ObsDockStudio = lazy(() => import('./components/ObsDockStudio.tsx').then(m => ({ default: m.ObsDockStudio || m.default })));
 const AlertObsPage = lazy(() => import('./components/AlertObsPage.tsx').then(m => ({ default: m.AlertObsPage })));
+const CountdownStudio = lazy(() => import('./components/CountdownStudio.tsx').then(m => ({ default: m.CountdownStudio })));
+const CountdownOverlayPage = lazy(() => import('./components/CountdownStudio.tsx').then(m => ({ default: m.CountdownOverlayPage })));
 const LazyFallback=()=> <div className="p-6 text-sm text-neutral-400">Loading…</div>;
 
 type TabErrorBoundaryProps = { name: string; children: React.ReactNode };
@@ -52,7 +54,7 @@ class TabErrorBoundary extends React.Component<TabErrorBoundaryProps, TabErrorBo
   }
 }
 
-type AppTab = 'player' | 'webPlayer' | 'commands' | 'chat' | 'overlay' | 'alertCreator' | 'obsDock' | 'diagnostics' | 'settings';
+type AppTab = 'player' | 'webPlayer' | 'commands' | 'chat' | 'overlay' | 'alertCreator' | 'obsDock' | 'countdown' | 'diagnostics' | 'settings';
 
 const DEFAULT_TAB_ORDER: AppTab[] = [
   'player',
@@ -62,6 +64,7 @@ const DEFAULT_TAB_ORDER: AppTab[] = [
   'overlay',
   'alertCreator',
   'obsDock',
+  'countdown',
   'diagnostics',
   'settings'
 ];
@@ -289,10 +292,11 @@ export default function App() {
   // Check if this window is the dedicated OBS overlay route
   const routePath = typeof window !== 'undefined' ? window.location.pathname : '';
   const isEditorRoute = routePath === '/overlay/editor' || routePath.startsWith('/overlay/editor/');
+  const isCountdownRoute = routePath === '/overlay/countdown';
   const isAlertObsRoute = routePath === '/overlay/alerts' || routePath.startsWith('/overlay/alerts/');
-  const isOverlayRoute = routePath.startsWith('/overlay') && !isEditorRoute && !isAlertObsRoute;
+  const isOverlayRoute = routePath.startsWith('/overlay') && !isEditorRoute && !isAlertObsRoute && !isCountdownRoute;
   const isObsDockRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/dock/player');
-  const isObsRoute = isOverlayRoute || isObsDockRoute;
+  const isObsRoute = isOverlayRoute || isObsDockRoute || isCountdownRoute;
 
   const [activeTab, setActiveTab] = useState<AppTab>(() => {
     if (typeof window === 'undefined') return 'player';
@@ -327,6 +331,8 @@ export default function App() {
     document.documentElement.lang = state?.config.language === 'de' ? 'de' : 'en';
   }, [state?.config.language]);
 
+
+  if (isCountdownRoute) return <Suspense fallback={null}><CountdownOverlayPage /></Suspense>;
 
   if (isEditorRoute) {
     return <Suspense fallback={<LazyFallback/>}><OverlayEditor playback={state?.playback} language={(state?.config.language as 'de' | 'en') || 'de'} /></Suspense>;
@@ -663,6 +669,7 @@ export default function App() {
     overlay: { label: t('tabOverlay'), icon: Tv },
     alertCreator: { label: language === 'en' ? 'Alert Creator' : 'Alert-Creator', icon: Bell },
     obsDock: { label: language === 'en' ? 'OBS Dock' : 'OBS Dock', icon: PanelTopOpen },
+    countdown: { label: 'Countdown', icon: Activity },
     diagnostics: { label: language === 'en' ? 'Diagnostics' : 'Diagnose', icon: Activity },
     settings: { label: 'Setup', icon: Settings },
   };
@@ -1088,6 +1095,8 @@ export default function App() {
               </TabErrorBoundary>
             </div>
           )}
+
+          {activeTab === 'countdown' && <div id="panel-countdown" role="tabpanel" aria-labelledby="tab-countdown"><Suspense fallback={<LazyFallback/>}><CountdownStudio /></Suspense></div>}
 
           {activeTab === 'diagnostics' && (
             <div id="panel-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics">

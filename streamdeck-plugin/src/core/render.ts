@@ -160,6 +160,11 @@ export function renderKey(id: string, state: BotState, ctx: RenderContext): stri
 }
 
 function renderKeyImage(id: string, state: BotState, ctx: RenderContext): string {
+  if (id.startsWith('timer-')) {
+    const [, profile, action] = id.split('-');
+    const label = ({ start: 'Start', pause: 'Pause', resume: 'Resume', reset: 'Reset', plus: '+1 min', minus: '-1 min' })[action] || action;
+    return frame(`${iconAt(action === 'pause' ? 'pause' : 'play', PURPLE, 72, 48, 1, ctx.online ? 1 : 0.4)}${text(ctx.armed ? 'Press again' : label, 72, 100, 18)}${text(profile === 'subathon' ? 'Subathon' : 'Streamstart', 72, 124, 13, GREY)}`);
+  }
   if (id === 'now-playing') return renderNowPlaying(state, ctx);
   const view = look(id, state, ctx);
   const online = ctx.online;

@@ -7,6 +7,7 @@ import { alertForClip, alertFrame, alertFrameSize, containAlertResolution, creat
 import { CreatorStage } from './alert-creator/CreatorStage.tsx';
 import { ALERT_PRIORITY, pushAlert, type StreamAlert } from '../streamAlerts.ts';
 import { applyChromaKey } from '../chromaKey.ts';
+import { formatCountdown, remainingCountdown, type CountdownId, type CountdownState } from '../countdown.ts';
 import { emptyStats, type StreamStats } from '../streamStats.ts';
 import type { SceneWidget } from '../scene.ts';
 import type { AlertFontAsset } from '../alertBox.ts';
@@ -411,7 +412,31 @@ export function CountdownWidget({ stats, playback, variant }: { stats: StreamSta
     : Math.max(0, Math.ceil((playback?.durationSeconds || 0) - (playback?.progressSeconds || 0)));
   const minutes = Math.floor(remaining / 60);
   const seconds = remaining % 60;
+  if (variant === 'streamstart' || variant === 'subathon') return <ManagedCountdown id={variant} />;
   return <div className="stream-timer">{minutes}:{String(seconds).padStart(2, '0')}</div>;
+}
+
+function ManagedCountdown({ id }: { id: CountdownId }) {
+  const [state, setState] = useState<(CountdownState & { serverNow: number }) | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const [offset, setOffset] = useState(0);
+  useEffect(() => {
+    let active = true, pollTimer: ReturnType<typeof setTimeout>;
+    const tick = setInterval(() => setNow(Date.now()), 250);
+    const poll = async () => {
+      try {
+        const response = await apiFetch('/api/countdowns', { signal: AbortSignal.timeout(5000) });
+        if (response.ok && active) { const data = await response.json(); setState(data); setOffset(data.serverNow - Date.now()); }
+      } catch { /* continue counting locally until reconnected */ }
+      if (active) pollTimer = setTimeout(poll, 1000);
+    };
+    void poll();
+    return () => { active = false; clearInterval(tick); clearTimeout(pollTimer); };
+  }, []);
+  if (!state) return <div className="stream-timer">—</div>;
+  const p = state.profiles[id], run = state.runs[id];
+  const hidden = run.status === 'finished' && p.finish.hideEnabled && now + offset >= run.completedAt + p.finish.hideAfterSeconds * 1000;
+  return <div className="stream-timer" style={{ visibility: hidden ? 'hidden' : 'visible' }}>{formatCountdown(remainingCountdown(p, run, now + offset))}</div>;
 }
 
 function safeImage(value: string): string {
@@ -849,9 +874,12 @@ export function StreamWidgetMenu({
         <>
           {select(ui('Quelle', 'Source'), widget.variant || 'track', [
             ['track', ui('Restlaufzeit des Songs', 'Time left in the song')],
-            ['clock', ui('Eigener Timer', 'Custom timer')]
+            ['clock', ui('Eigener Timer', 'Custom timer')],
+            ['streamstart', 'Streamstart'],
+            ['subathon', 'Subathon']
           ])}
           {widget.variant === 'clock' && <TimerStart language={language} />}
+          {(widget.variant === 'streamstart' || widget.variant === 'subathon') && <p>{ui('Zeit und Regeln im Countdown-Menü einstellen. Für Abschluss-Sound und Alert die eigene Countdown-OBS-URL verwenden.', 'Configure time and rules in the Countdown menu. Use its dedicated OBS URL for finish audio and alerts.')}</p>}
         </>
       )}
       {widget.type === 'text' && <TextFields variant={widget.variant} language={language} onVariant={onVariant} />}

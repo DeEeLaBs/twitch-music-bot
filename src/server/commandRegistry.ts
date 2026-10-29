@@ -14,6 +14,7 @@ export type CommandName =
   | 'resume'
   | 'blacklist'
   | 'streamplaylist'
+  | 'timer'
   | 'wrongsong';
 
 export interface CommandDefinition {
@@ -38,6 +39,7 @@ export const COMMANDS: CommandDefinition[] = [
   { name: 'clearqueue', defaultPermissions: MOD_ROLES },
   { name: 'pause', defaultPermissions: MOD_ROLES },
   { name: 'resume', defaultPermissions: MOD_ROLES },
+  { name: 'timer', defaultPermissions: MOD_ROLES },
   { name: 'blacklist', defaultPermissions: MOD_ROLES },
   { name: 'wrongsong', aliases: ['undo', 'oops'], defaultPermissions: ALL_ROLES },
   { name: 'streamplaylist', aliases: ['playlist', 'spl', 'addplaylist'], defaultPermissions: MOD_ROLES }

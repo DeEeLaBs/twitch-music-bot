@@ -1,4 +1,5 @@
 export type AlertKind = 'follow' | 'subscription' | 'resub' | 'gift' | 'communitygift' | 'tip' | 'cheer' | 'raid' | 'host';
+import type { CountdownBonus } from './countdown.ts';
 export type AlertTier = 'prime' | '1000' | '2000' | '3000';
 
 export interface StreamAlert {
@@ -133,5 +134,25 @@ export function eventSubSubscriptions(broadcasterId: string, sessionId: string, 
     items.push({ ...user, type: 'channel.subscribe' }, { ...user, type: 'channel.subscription.gift' }, { ...user, type: 'channel.subscription.message' });
   }
   if (has('bits:read')) items.push({ ...user, type: 'channel.cheer' });
+  if (has('channel:read:redemptions') || has('channel:manage:redemptions')) items.push({ ...user, type: 'channel.channel_points_custom_reward_redemption.add' });
   return items;
+}
+
+export function countdownBonusFromNotification(raw: unknown, now = Date.now()): CountdownBonus | null {
+  const message = raw as { metadata?: { message_id?: string; message_timestamp?: string }; payload?: EventSubPayload };
+  const type = message?.payload?.subscription?.type;
+  const event = message?.payload?.event || {};
+  const id = type === 'channel.channel_points_custom_reward_redemption.add' ? event.id : message?.metadata?.message_id;
+  if (typeof id !== 'string' || !id) return null;
+  const parsedAt = Date.parse(String(event.redeemed_at || message.metadata?.message_timestamp || ''));
+  const at = Number.isFinite(parsedAt) ? parsedAt : now;
+  if (type === 'channel.channel_points_custom_reward_redemption.add') {
+    const reward = event.reward as { id?: string } | undefined;
+    if (!reward?.id || event.status === 'CANCELED') return null;
+    return { id: `twitch:reward:${id}`, at, source: 'reward', user: String(event.user_name || 'Anonym'), amount: 1, rewardId: reward.id };
+  }
+  const alert = alertFromNotification(raw, at);
+  if (!alert) return null;
+  const source = alert.kind === 'subscription' || alert.kind === 'resub' ? 'sub' : alert.kind === 'gift' || alert.kind === 'communitygift' ? 'gift' : alert.kind === 'cheer' ? 'bits' : null;
+  return source ? { id: `twitch:${id}`, at, source, user: alert.user, amount: source === 'sub' ? 1 : alert.amount, tier: alert.tier } : null;
 }

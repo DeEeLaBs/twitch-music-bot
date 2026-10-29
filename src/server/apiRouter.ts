@@ -7,6 +7,7 @@ import { createIntegrationRoutes } from './routes/integrationRoutes.ts';
 import { createSpotifyRoutes } from './routes/spotifyRoutes.ts';
 import { createStreamDeckRoutes } from './routes/streamDeckRoutes.ts';
 import { BotError } from './errors.ts';
+import { createCountdownRoutes } from './routes/countdownRoutes.ts';
 
 export function createApiRouter(options:{sessionToken:string;appVersion:string;overlayAssetsDir:string}) {
   const api=Router();
@@ -39,5 +40,6 @@ export function createApiRouter(options:{sessionToken:string;appVersion:string;o
   api.use(createPlaybackRoutes());
   api.use(createQueueRoutes());
   api.use(createStreamDeckRoutes());
+  api.use(createCountdownRoutes());
   return api;
 }

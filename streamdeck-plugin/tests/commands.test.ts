@@ -17,6 +17,17 @@ test('every action has a unique id and a tier', () => {
   assert.ok(ACTIONS.every(action => [1, 2, 3].includes(action.tier)));
 });
 
+test('countdown keys use the shared controls and reset requires confirmation', async () => {
+  for (const profile of ['streamstart', 'subathon']) {
+    for (const action of ['start', 'pause', 'resume', 'reset', 'plus', 'minus']) {
+      const { client, calls } = recorder();
+      await run(`timer-${profile}-${action}`, EMPTY_STATE, client);
+      assert.deepEqual(calls, [[`/api/countdowns/${profile}/control`, action === 'plus' || action === 'minus' ? { action: 'add', seconds: action === 'plus' ? 60 : -60 } : { action }]]);
+    }
+    assert.equal(ACTION_BY_ID.get(`timer-${profile}-reset`)?.confirm, true);
+  }
+});
+
 test('tier 1 actions call the matching bot endpoints', async () => {
   const expected: Record<string, string> = {
     'play-pause': '/api/playback/play-pause', next: '/api/playback/skip', previous: '/api/playback/previous',
@@ -59,7 +70,7 @@ test('blocking the requester uses the current song and needs a requester', async
 });
 
 test('destructive actions are flagged for confirmation and harmless ones are not', () => {
-  assert.deepEqual(ACTIONS.filter(action => action.confirm).map(action => action.id).sort(), ['block-requester', 'clear-queue']);
+  assert.deepEqual(ACTIONS.filter(action => action.confirm).map(action => action.id).sort(), ['block-requester', 'clear-queue', 'timer-streamstart-reset', 'timer-subathon-reset']);
 });
 
 test('switches flip the current value; absent settings count as on (bot default)', async () => {

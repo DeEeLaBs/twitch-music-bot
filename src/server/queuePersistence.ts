@@ -18,17 +18,27 @@ export class QueuePersistence {
     fs.mkdirSync(this.dataDir, { recursive: true });
   }
 
+  private readWithBackup(file: string, valid: (value: any) => boolean): any {
+    for (const candidate of [file, file + '.backup']) {
+      try {
+        const value = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+        if (!valid(value)) continue;
+        if (candidate !== file) writeJson(file, value, { preserveBackup: true, strictAtomic: true });
+        return value;
+      } catch (error) {
+        if (fs.existsSync(candidate)) console.warn('[QueuePersistence] Datei konnte nicht geladen werden:', candidate, error);
+      }
+    }
+    return undefined;
+  }
+
   public load(): PersistedQueueState {
     this.ensureDirectory();
     let blacklist: BlacklistRule[] = [];
     let blacklistLoaded = false;
     const blacklistFile = path.join(this.dataDir, 'blacklist.json');
-    if (fs.existsSync(blacklistFile)) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(blacklistFile, 'utf8'));
-        if (Array.isArray(parsed)) { blacklist = parsed; blacklistLoaded = true; }
-      } catch (error) { console.warn('[QueuePersistence] Blacklist konnte nicht gelesen werden:', error); }
-    }
+    const parsedBlacklist = this.readWithBackup(blacklistFile, Array.isArray);
+    if (parsedBlacklist !== undefined) { blacklist = parsedBlacklist; blacklistLoaded = true; }
     if (!blacklistLoaded) {
       blacklist = [
         { id: 'bl-1', term: 'earrape', type: 'keyword', addedBy: 'system', addedAt: Date.now() },
@@ -36,16 +46,16 @@ export class QueuePersistence {
         { id: 'bl-3', term: 'moan', type: 'keyword', addedBy: 'system', addedAt: Date.now() },
         { id: 'bl-4', term: 'scream', type: 'keyword', addedBy: 'system', addedAt: Date.now() }
       ];
-      this.saveBlacklist(blacklist);
+      if (!fs.existsSync(blacklistFile) && !fs.existsSync(blacklistFile + '.backup')) this.saveBlacklist(blacklist);
     }
 
     let queue: Track[] = [];
     let recoveredTrack: Track | null = null;
     let history: Track[] = [];
     const queueFile = path.join(this.dataDir, 'queue.json');
-    if (fs.existsSync(queueFile)) {
+    const saved = this.readWithBackup(queueFile, value => Array.isArray(value) || (value && Array.isArray(value.queue)));
+    if (saved !== undefined) {
       try {
-        const saved = JSON.parse(fs.readFileSync(queueFile, 'utf8'));
         if (Array.isArray(saved)) queue = saved;
         else if (saved && Array.isArray(saved.queue)) {
           queue = saved.queue;

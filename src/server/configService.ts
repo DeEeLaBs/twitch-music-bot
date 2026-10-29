@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { BadgeType, BotConfig } from '../types.ts';
 import { writeJson } from './atomicStore.ts';
-import { SecureTokenStore } from './secureTokenStore.ts';
+import { SecureTokenStore, SecretStoreError } from './secureTokenStore.ts';
 import { logger } from './logger.ts';
+import { builtInTwitchClientId } from './twitchApp.ts';
 import { botEvents } from './eventBus.ts';
 
 const CONFIG_VERSION = 5;
@@ -32,6 +33,7 @@ function defaultConfig(): BotConfig { return {
   preventRecentDuplicates: 10,
   voteSkipThreshold: 3,
   autoPlayRadio: true,
+  songRequestsOpen: true,
   streamPlaylistUrl: '',
   nowPlayingCooldownSeconds: 15,
   requestCooldownSeconds: 10,
@@ -121,6 +123,8 @@ export class ConfigService {
     out.spotifyPreferredDeviceId = typeof out.spotifyPreferredDeviceId === 'string' ? out.spotifyPreferredDeviceId.trim().slice(0,256) : '';
     if (out.playbackProvider !== 'spotify' && out.playbackProvider !== 'youtube_music') out.playbackProvider = 'youtube_music';
     out.spotifyFallbackToYtm = out.spotifyFallbackToYtm !== false;
+    out.twitchClientId = typeof out.twitchClientId === 'string' ? out.twitchClientId.trim() : '';
+    if (!out.twitchClientId) out.twitchClientId = builtInTwitchClientId();
     if (out.language !== 'de' && out.language !== 'en') out.language='en';
     if (!['debug','info','warn','error'].includes(out.logLevel || 'info')) out.logLevel='info';
     if (Array.isArray(out.tabOrder)) {
@@ -143,19 +147,24 @@ export class ConfigService {
     // One-time migration of legacy plaintext secrets.
     const legacyTwitch=typeof raw.twitchBotOauthToken==='string'?raw.twitchBotOauthToken:'';
     const legacyYtm=typeof raw.ytmdaAuthToken==='string'?raw.ytmdaAuthToken:'';
-    if (legacyTwitch) this.secrets.set('twitchBotOauthToken',legacyTwitch);
-    if (legacyYtm) this.secrets.set('ytmdaAuthToken',legacyYtm);
+    let migrationBlocked=false;
+    for (const [key,value] of [['twitchBotOauthToken',legacyTwitch],['ytmdaAuthToken',legacyYtm]] as const) {
+      if (!value) continue;
+      try { this.secrets.set(key,value); }
+      catch (error) { migrationBlocked=true; logger.log('error','CONFIG','Gespeicherte Zugangsdaten sind nicht nutzbar; Migration wird später wiederholt',{problem:error instanceof SecretStoreError?error.code:'unknown'}); }
+    }
     delete raw.twitchBotOauthToken; delete raw.ytmdaAuthToken;
     const migrated=this.migrate(raw);
     const merged=this.validate({
       ...base,
       ...migrated,
-      twitchBotOauthToken: this.secrets.get('twitchBotOauthToken') || process.env.TWITCH_BOT_OAUTH_TOKEN || '',
+      twitchBotOauthToken: this.secrets.get('twitchBotOauthToken') || legacyTwitch || process.env.TWITCH_BOT_OAUTH_TOKEN || '',
       twitchClientSecret: this.secrets.get('twitchClientSecret') || process.env.TWITCH_CLIENT_SECRET || '',
-      ytmdaAuthToken: this.secrets.get('ytmdaAuthToken') || process.env.YTMDA_AUTH_TOKEN || ''
+      ytmdaAuthToken: this.secrets.get('ytmdaAuthToken') || legacyYtm || process.env.YTMDA_AUTH_TOKEN || ''
     } as BotConfig);
     merged.companionConnected=false; merged.twitchConnected=false; delete merged.twitchTokenConfigured; delete merged.twitchClientSecretConfigured; delete merged.ytmTokenConfigured;
-    if (raw.configVersion !== CONFIG_VERSION || legacyTwitch || legacyYtm || recoveredFromBackup) {
+    // While legacy plaintext secrets could not be moved into the secret store, the old config file is the only copy.
+    if (!migrationBlocked && (raw.configVersion !== CONFIG_VERSION || legacyTwitch || legacyYtm || recoveredFromBackup)) {
       this.saveConfig(merged, recoveredFromBackup);
       // writeJson creates a backup before replacing the main config. During a legacy
       // secret migration that backup would otherwise still contain plaintext tokens.
@@ -185,8 +194,7 @@ export class ConfigService {
   private persistedConfig(config: BotConfig): PersistedConfig {
     const persisted: PersistedConfig={...config,configVersion:CONFIG_VERSION};
     delete persisted.companionConnected; delete persisted.twitchConnected; delete persisted.twitchTokenConfigured; delete persisted.twitchClientSecretConfigured; delete persisted.ytmTokenConfigured;
-    delete persisted.twitchBotOauthToken; delete persisted.twitchClientSecret; delete persisted.ytmdaAuthToken;
-    return persisted;
+    delete persisted.twitchBotOauthToken; delete persisted.twitchClientSecret; delete persisted.ytmdaAuthToken;    return persisted;
   }
   private saveConfig(config: BotConfig, preserveBackup = false): void {
     writeJson(this.file,this.persistedConfig(config), { preserveBackup });

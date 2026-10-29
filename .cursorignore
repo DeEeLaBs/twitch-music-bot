@@ -1,0 +1,17 @@
+node_modules/
+desktop/node_modules/
+streamdeck-plugin/node_modules/
+standalone/
+build/
+dist/
+coverage/
+
+# Query with graphify query. Do not open the raw graph or report.
+graphify-out/
+
+# Historical test writeups. Not needed to change code.
+docs/reports/
+
+# ECC command library and install ledger. User-level skills already cover these.
+.agents/workflows/
+.agents/ecc-install-state.json

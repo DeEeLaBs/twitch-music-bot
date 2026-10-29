@@ -6,6 +6,10 @@ export type BotEventMap = {
   'search:failed': { query: string; error: string };
   'twitch:connection': { connected: boolean };
   'twitch:auth_failed': { reason?: string };
+  'chat:message': import('../overlayChat.ts').OverlayChatLine;
+  'chat:clear': import('../overlayChat.ts').ChatClearEvent;
+  'chat:room': { roomId: string };
+  'queue:request_removed': { track: import('../types.ts').Track };
 };
 
 type Handler<T> = (payload: T) => void;

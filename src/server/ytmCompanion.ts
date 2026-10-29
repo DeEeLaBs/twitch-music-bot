@@ -1,6 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 import type { Track, YtmPairingState, YtmDiagnosticResult } from '../types.ts';
 import { CircuitBreaker } from './circuitBreaker.ts';
+import { YTM_MIN_REQUEST_GAP_MS, ytmRealtimeStaleMs } from './playbackPoll.ts';
 
 export interface YtmSongInfo {
   title: string; author: string; album?: string; cover?: string; duration?: number;
@@ -108,7 +109,7 @@ export class YtmCompanionClient {
           if (this.state.progressSeconds >= this.state.durationSeconds) this.state.isPlaying = false;
           this.emit();
         }
-      } else if (Date.now() - this.lastRealtime > 2500) void this.fetchSongInfo();
+      } else if (Date.now() - this.lastRealtime > ytmRealtimeStaleMs(Boolean(this.state.songInfo))) void this.fetchSongInfo();
     }, 1000);
   }
   public disconnect() {
@@ -183,7 +184,7 @@ export class YtmCompanionClient {
     if (this.simulationMode) return this.state.songInfo;
     if (this.polling || Date.now() < this.nextRequestAt || !this.breaker.canRun()) return null;
     this.polling = true; const generation = this.generation;
-    this.nextRequestAt = Date.now() + 1000;
+    this.nextRequestAt = Date.now() + YTM_MIN_REQUEST_GAP_MS;
     try {
       const res = await fetch(`${this.companionUrl}/api/v1/state`, { headers: this.getAuthHeaders(), signal: AbortSignal.timeout(4000) });
       if (generation !== this.generation) return null;

@@ -4,7 +4,7 @@ import { QueueManager } from './queueManager.ts';
 import { YouTubeResolver, ResolverError } from './youtubeResolver.ts';
 import { resolveForPlaybackProvider } from './playbackResolver.ts';
 import { YtmCompanionClient } from './ytmCompanion.ts';
-import { isAuthenticationFailure, parsePrivmsg } from './twitchIrc.ts';
+import { chatLineFromPrivmsg, isAuthenticationFailure, parseClear, parsePrivmsg } from './twitchIrc.ts';
 import { ChannelPointsService } from './channelPointsService.ts';
 import { botEvents } from './eventBus.ts';
 import { chatLanguage, localizeCompanionError, twitchMessage } from './twitchMessages.ts';
@@ -23,6 +23,7 @@ export class TwitchBot {
   private isConnected: boolean = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
+  private started = false;
   private authFailed = false;
   private authError = '';
   private lastReconnectDelayMs = 0;
@@ -30,8 +31,11 @@ export class TwitchBot {
   private lastNowPlayingTime: number = 0;
   private logCallbacks: Set<LogCallback> = new Set();
   private connectionCallbacks: Set<(connected: boolean) => void> = new Set();
+  private roomId = '';
   private commandTimes = new Map<string, number>();
   private globalRequestTime = 0;
+  /** Texts this process just sent. Twitch echoes them back on the same login. */
+  private outgoingEchoes: string[] = [];
 
   private t(key: string, args: Record<string, string | number> = {}): string { return twitchMessage(chatLanguage(this.config), key, args); }
 
@@ -48,6 +52,23 @@ export class TwitchBot {
     this.ytmCompanion = ytmCompanion;
     this.streamPlaylistService = streamPlaylistService || new StreamPlaylistService();
     for (const track of this.queueManager.getRedemptionTracks?.() || []) this.scheduleRedemption(track);
+    botEvents.on('queue:request_removed', ({ track }) => { void this.cancelQueuedRedemption(track); });
+  }
+
+  private async cancelQueuedRedemption(track: Track) {
+    const timer = this.redemptionTimers.get(track.id);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.redemptionTimers.delete(track.id);
+    if (!track.redemptionId || !track.rewardId) return;
+    try {
+      const refunded = await ChannelPointsService.updateRedemptionStatus(this.config, track.rewardId, track.redemptionId, 'CANCELED');
+      this.log(refunded ? 'mod' : 'warn', refunded
+        ? `Channel points refunded because "${track.title}" was removed before it started`
+        : `Channel points refund failed for "${track.title}"`);
+    } catch (error) {
+      this.log('warn', `Channel points refund failed: ${String(error)}`);
+    }
   }
 
   private scheduleRedemption(track: Track) {
@@ -102,7 +123,8 @@ export class TwitchBot {
       this.authError = '';
       this.reconnectAttempt = 0;
       this.disconnect(false);
-      this.connect();
+      // Before start() the owner is still preparing credentials; start() makes the one connection.
+      if (this.started) this.connect();
     }
   }
 
@@ -122,8 +144,10 @@ export class TwitchBot {
     return this.isConnected;
   }
 
-  public start() {
-    this.connect();
+  /** With connect:false the bot is armed so that fresh credentials connect it, but nothing is attempted yet. */
+  public start(options: { connect?: boolean } = {}) {
+    this.started = true;
+    if (options.connect !== false) this.connect();
   }
 
   private connect() {
@@ -210,13 +234,15 @@ export class TwitchBot {
     if (!safeText) return;
     if (this.ws && this.ws.readyState === WebSocket.OPEN && channel) {
       this.ws.send(`PRIVMSG #${channel} :${safeText}`);
+      this.outgoingEchoes.push(safeText);
+      if (this.outgoingEchoes.length > 40) this.outgoingEchoes.shift();
     }
     this.log('bot', safeText, this.config.twitchBotUsername || 'Bot', 'broadcaster');
   }
 
   private handleRawIrc(raw: string) {
     const channel = this.config.twitchChannel.trim().toLowerCase().replace(/^#/, '');
-    const botUser = this.config.twitchBotUsername.trim().toLowerCase();
+    const botUser = this.config.twitchBotUsername.trim().toLowerCase().replace(/^#/, '');
     const lines = raw.split('\r\n');
 
     for (const line of lines) {
@@ -252,10 +278,33 @@ export class TwitchBot {
         }
       }
 
+      const clear = parseClear(line);
+      if (clear) {
+        botEvents.emit('chat:clear', clear);
+        continue;
+      }
+
       if (line.includes('PRIVMSG')) {
+        // A separate bot login never types commands, so every line from it is an echo.
+        // When the bot login is the channel owner, that same prefix is also their real chat.
+        if (this.isIgnoredBotLine(line, botUser, channel)) continue;
         void this.parsePrivMsg(line).catch(error => this.log('warn', `Twitch reward processing failed: ${String(error)}`));
       }
     }
+  }
+
+  private isIgnoredBotLine(line: string, botUser: string, channel: string): boolean {
+    if (!botUser) return false;
+    const parsed = parsePrivmsg(line);
+    const sender = parsed?.sender.toLowerCase() || '';
+    const fromBot = sender === botUser || line.toLowerCase().includes(`!${botUser}@`);
+    if (!fromBot || (sender && sender !== botUser)) return false;
+    if (botUser !== channel) return true;
+    if (!parsed) return false;
+    const echoAt = this.outgoingEchoes.indexOf(parsed.message);
+    if (echoAt < 0) return false;
+    this.outgoingEchoes.splice(echoAt, 1);
+    return true;
   }
 
   private async parsePrivMsg(line: string) {
@@ -263,6 +312,13 @@ export class TwitchBot {
     if (!parsed) return;
 
     const { sender, message: messageBody, tags } = parsed;
+    const chatLine = chatLineFromPrivmsg(parsed, this.config.twitchChannel);
+    if (chatLine) botEvents.emit('chat:message', chatLine);
+    const roomId = tags['room-id'];
+    if (roomId && roomId !== this.roomId) {
+      this.roomId = roomId;
+      botEvents.emit('chat:room', { roomId });
+    }
     const badgesRaw = tags['badges'] || '';
     const badge = this.resolveBadge(badgesRaw, sender);
     const requester: Requester = {
@@ -443,8 +499,8 @@ export class TwitchBot {
     if (command === 'veto') {
       if (!this.canUse('veto', requester.badge)) return;
       const target = parsedCommand?.args || '';
-      if (!target) { this.sendMessage(this.t('vetoUsage', { user: requester.displayName })); return; }
-      const removed = this.queueManager.vetoTrack(/^\d+$/.test(target) ? Number(target) - 1 : target);
+      if (!/^\d+$/.test(target)) { this.sendMessage(this.t('vetoUsage', { user: requester.displayName })); return; }
+      const removed = this.queueManager.vetoTrack(Number(target) - 1);
       if (removed) {
         this.log('mod', `Vetoed song "${removed.title}" by @${requester.displayName}`, requester.displayName, requester.badge);
         this.sendMessage(this.t('vetoed', { title: removed.title }));
@@ -575,6 +631,13 @@ export class TwitchBot {
       }
       return false;
     };
+
+    // Requests can be closed (e.g. from a Stream Deck key). The broadcaster and moderators may still add songs.
+    if (this.config.songRequestsOpen === false && requester.badge !== 'broadcaster' && requester.badge !== 'moderator') {
+      const closedMsg = this.t('srClosed', { user: requester.displayName });
+      if (!await refundIfRedemption(closedMsg)) this.sendMessage(closedMsg);
+      return;
+    }
 
     if (!query || query.trim().length === 0) {
       const usageMsg = this.t('srUsage', { user: requester.displayName });

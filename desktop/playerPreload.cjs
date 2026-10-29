@@ -7,7 +7,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const started = performance.now();
   const check = () => {
     if (done) return;
-    const root = document.querySelector('main, [role="main"], ytmusic-browse-response, ytmusic-player-page');
+    const root = document.querySelector('main, #main, [role="main"], [data-testid="root"], ytmusic-browse-response, ytmusic-player-page, ytmusic-app');
     const rect = root?.getBoundingClientRect();
     const hasContent = root && rect.width > 0 && rect.height > 0 &&
       (root.textContent || '').trim().length > 40 &&

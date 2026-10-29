@@ -23,7 +23,15 @@ type Props = {
   interactive?: boolean;
   options?: Partial<DockOptions>;
   connectionLost?: boolean;
+  player?: 'youtube_music' | 'spotify';
+  playerConnected?: boolean;
 };
+
+function idlePlayerMessage(language: 'de' | 'en', player: 'youtube_music' | 'spotify', connected: boolean) {
+  const name = player === 'spotify' ? 'Spotify' : 'YouTube Music';
+  if (!connected) return language === 'de' ? `${name} ist nicht verbunden` : `${name} is not connected`;
+  return language === 'de' ? `Warte auf ${name} …` : `Waiting for ${name} …`;
+}
 
 const formatTime = (value: number) => {
   const safe = Math.max(0, Number.isFinite(value) ? value : 0);
@@ -44,7 +52,7 @@ const hexToRgb = (hex?: string) => {
   return `${(value >> 16) & 255},${(value >> 8) & 255},${value & 255}`;
 };
 
-export function ObsPlayerDock({ playback, queue = [], language = 'de', interactive = true, options, connectionLost = false }: Props) {
+export function ObsPlayerDock({ playback, queue = [], language = 'de', interactive = true, options, connectionLost = false, player = 'youtube_music', playerConnected = true }: Props) {
   const settings = { ...DEFAULT_DOCK_OPTIONS, ...options };
   const safeQueue = Array.isArray(queue) ? queue : [];
   const dockRef = useRef<HTMLElement | null>(null);
@@ -193,12 +201,12 @@ export function ObsPlayerDock({ playback, queue = [], language = 'de', interacti
 
   const VolumeIcon = localVolume <= 0 ? VolumeX : localVolume < 50 ? Volume1 : Volume2;
   const title = song?.title || (language === 'de' ? 'Kein Song läuft' : 'Nothing playing');
-  const artist = song?.artist || (language === 'de' ? 'Warte auf YouTube Music …' : 'Waiting for YouTube Music …');
+  const artist = song?.artist || idlePlayerMessage(language, player, playerConnected);
   const queueLabel = language === 'de' ? 'Warteschlange' : 'Queue';
   const style = {
     '--dock-accent': settings.accent,
     '--dock-accent-rgb': hexToRgb(settings.accent),
-    '--dock-opacity': String(settings.opacity),
+    '--dock-opacity': '1',
     '--dock-scale': String(settings.scale),
   } as React.CSSProperties;
 

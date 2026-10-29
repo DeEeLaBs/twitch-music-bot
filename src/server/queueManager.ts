@@ -541,7 +541,11 @@ export class QueueManager {
         if (this.history[index]?.videoId === resolved.videoId) return { success:false, error:this.text(`Dieser Song lief bereits in den letzten ${recentCount} Titeln.`, `This song was already played within the last ${recentCount} tracks.`) };
       }
     }
-    if (this.queue.some(track => track.videoId === resolved.videoId) || this.currentTrack?.videoId === resolved.videoId || this.pendingTrack?.videoId === resolved.videoId || this.recoveredTrack?.videoId === resolved.videoId) return { success: false, error: this.text('Dieser Song ist bereits aktiv oder in der Warteschlange.', 'This song is already playing or in the queue.') };
+    const externalSpotifyUri = !this.currentTrack && this.playbackState.source === 'external'
+      ? this.playbackState.currentSong?.spotifyUri
+      : undefined;
+    const sameExternalSpotify = Boolean(resolved.spotifyUri && externalSpotifyUri && resolved.spotifyUri === externalSpotifyUri);
+    if (sameExternalSpotify || this.queue.some(track => track.videoId === resolved.videoId) || this.currentTrack?.videoId === resolved.videoId || this.pendingTrack?.videoId === resolved.videoId || this.recoveredTrack?.videoId === resolved.videoId) return { success: false, error: this.text('Dieser Song ist bereits aktiv oder in der Warteschlange.', 'This song is already playing or in the queue.') };
     // 1. Duration Limit Check (default 7 minutes / 420 seconds)
     const maxDuration = this.config.maxSongDurationSeconds || 420;
     if (resolved.duration > maxDuration) {
@@ -825,8 +829,15 @@ export class QueueManager {
   }
 
   public removeRequester(username: string): number {
-    const key=username.toLowerCase(); const before=this.queue.length; this.queue=this.queue.filter(t=>t.requester.username.toLowerCase()!==key);
-    const removed=before-this.queue.length; if(removed){this.saveQueue();this.notify();} return removed;
+    const key = username.toLowerCase();
+    const removed = this.queue.filter(track => track.requester.username.toLowerCase() === key);
+    this.queue = this.queue.filter(track => track.requester.username.toLowerCase() !== key);
+    if (removed.length) {
+      this.saveQueue();
+      for (const track of removed) botEvents.emit('queue:request_removed', { track });
+      this.notify();
+    }
+    return removed.length;
   }
 
   public setRequesterBlocked(username: string, blocked: boolean): string[] {
@@ -844,16 +855,20 @@ export class QueueManager {
       if (nextTrack) {
         return { success: true, nextTrack };
       }
-      // If the queued track failed to start during an explicit skip, remove the stuck track
+      // A timeout or an unconfirmed start leaves the request queued so it can be retried.
+      if (this.failedStartShouldStayQueued()) return { success: false, nextTrack: null };
+      // A confirmed rejection cannot start. Drop that track and refund its redemption.
       const failedIndex = this.queue.findIndex(track => (track.playbackProvider || (track.spotifyUri ? 'spotify' : 'youtube_music')) === (this.config.playbackProvider || 'youtube_music'));
       if (failedIndex >= 0) {
-        this.queue.splice(failedIndex, 1);
+        const [removed] = this.queue.splice(failedIndex, 1);
         this.saveQueue();
+        if (removed) botEvents.emit('queue:request_removed', { track: removed });
         if (this.queue.some(track => (track.playbackProvider || (track.spotifyUri ? 'spotify' : 'youtube_music')) === (this.config.playbackProvider || 'youtube_music'))) {
           const subsequent = await this.playNext();
           if (subsequent) {
             return { success: true, nextTrack: subsequent };
           }
+          if (this.failedStartShouldStayQueued()) return { success: false, nextTrack: null };
         }
       }
     }
@@ -940,17 +955,22 @@ export class QueueManager {
     return { track };
   }
 
+  private failedStartShouldStayQueued(): boolean {
+    return /bleibt erhalten|remains in the queue|wird noch geladen|still loading|within \d+ seconds|nach \d+ Sekunden/i.test(this.playbackError);
+  }
+
   public vetoTrack(trackIdOrIndex: string | number): Track | null {
     let index = -1;
     if (typeof trackIdOrIndex === 'number') {
       index = trackIdOrIndex;
     } else {
-      index = this.queue.findIndex(t => t.id === trackIdOrIndex || t.title.toLowerCase().includes(trackIdOrIndex.toLowerCase()));
+      index = this.queue.findIndex(t => t.id === trackIdOrIndex);
     }
 
     if (index >= 0 && index < this.queue.length) {
       const removed = this.queue.splice(index, 1)[0];
       this.saveQueue();
+      botEvents.emit('queue:request_removed', { track: removed });
       this.notify();
       return removed;
     }
@@ -961,10 +981,12 @@ export class QueueManager {
    * Moderator: clear entire queue
    */
   public clearQueue(): number {
-    const count = this.queue.length;
+    const removed = this.queue;
+    const count = removed.length;
     this.queue = [];
     this.playbackError = '';
     this.saveQueue();
+    for (const track of removed) botEvents.emit('queue:request_removed', { track });
     this.notify();
     return count;
   }

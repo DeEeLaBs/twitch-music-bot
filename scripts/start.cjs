@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 process.chdir(root);
@@ -14,28 +14,22 @@ const sourceServer = path.join(root, 'server.ts');
 let buildVersion = '';
 try { buildVersion = fs.readFileSync(buildVersionFile, 'utf8').trim(); } catch {}
 
-function tail(text, lines = 24) {
-  return String(text || '').split(/\r?\n/).filter(Boolean).slice(-lines).join('\n');
-}
-
 function runNpm(args, label, { allowFailure = false } = {}) {
   console.log(label);
   const result = spawnSync(npmCommand, args, {
     cwd: root,
-    encoding: 'utf8',
+    stdio: 'inherit',
     windowsHide: true,
     shell: process.platform === 'win32',
     env: { ...process.env, FORCE_COLOR: '0' },
   });
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) {
     const detail = result.error.message || String(result.error);
     if (allowFailure) return { ok: false, detail };
     throw new Error(`${label} fehlgeschlagen.\n${detail}`);
   }
   if (result.status !== 0) {
-    const detail = tail(`${result.stdout || ''}\n${result.stderr || ''}`) || `npm Exit-Code ${result.status}`;
+    const detail = `npm Exit-Code ${result.status}`;
     if (allowFailure) return { ok: false, detail };
     throw new Error(`${label} fehlgeschlagen.\n\n${detail}`);
   }
@@ -116,7 +110,59 @@ function isSourceNewer() {
   }
 }
 
-const buildRequired = !fs.existsSync(serverBundle) || buildVersion !== packageVersion || isSourceNewer();
+const bundleMissing = !fs.existsSync(serverBundle);
+const indexHtml = path.join(root, 'dist', 'index.html');
+const bundleReady = !bundleMissing && fs.existsSync(indexHtml);
+const sourcesNewer = isSourceNewer();
+const buildRequired = bundleMissing || sourcesNewer;
+
+if (!buildRequired && buildVersion !== packageVersion) {
+  fs.mkdirSync(path.dirname(buildVersionFile), { recursive: true });
+  fs.writeFileSync(buildVersionFile, packageVersion);
+  console.log(`Build war schon aktuell. Stempel auf Version ${packageVersion} gesetzt.`);
+}
+
+let serverChild = null;
+let replacingServer = false;
+
+function hookServer(child) {
+  serverChild = child;
+  child.on('exit', (code, signal) => {
+    if (replacingServer || serverChild !== child) return;
+    process.exit(code == null ? (signal ? 1 : 0) : code);
+  });
+}
+
+function startBundle() {
+  const child = spawn(process.execPath, [serverBundle], {
+    cwd: root,
+    stdio: 'inherit',
+    windowsHide: true,
+    env: { ...process.env, MUSICBOT_PARENT_PID: String(process.pid) },
+  });
+  hookServer(child);
+  return child;
+}
+
+function stopBundle() {
+  const child = serverChild;
+  if (!child || child.killed) return Promise.resolve();
+  replacingServer = true;
+  return new Promise(resolve => {
+    child.once('exit', () => {
+      replacingServer = false;
+      resolve();
+    });
+    child.kill();
+  });
+}
+
+// OBS loads the Songbot dock as soon as it starts. Serve the last bundle
+// before a source rebuild so that dock is not left on a connection error.
+if (bundleReady) {
+  console.log('Server startet mit dem vorhandenen Build, damit das OBS-Dock verbinden kann.');
+  startBundle();
+}
 
 if (buildRequired) {
   let repairInfo = '';
@@ -139,8 +185,17 @@ if (buildRequired) {
 
   if (!build.ok || !fs.existsSync(serverBundle)) {
     const reason = `${build.detail || 'Der Produktions-Build wurde nicht erzeugt.'}${repairInfo}`;
-    runSourceFallback(reason);
+    if (serverChild) {
+      console.error('\nProduktions-Build konnte nicht aktualisiert werden. Der vorhandene Server bleibt aktiv.');
+      console.error(reason);
+    } else {
+      runSourceFallback(reason);
+    }
+  } else if (serverChild) {
+    stopBundle().then(() => startBundle());
+  } else {
+    startBundle();
   }
+} else if (!serverChild) {
+  startBundle();
 }
-
-require(serverBundle);

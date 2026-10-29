@@ -9,6 +9,7 @@ import { YtmPairingWizard } from './YtmPairingWizard.tsx';
 import { useTranslations } from '../translations.ts';
 
 import { ChannelPointsSettings } from './ChannelPointsSettings.tsx';
+import { StreamDeckSetupCard } from './StreamDeckSetupCard.tsx';
 import { apiFetch, primeConfigSession, sendConfigOnExit } from '../apiClient.ts';
 
 interface SetupGuideProps {
@@ -45,6 +46,9 @@ export const SetupGuide: React.FC<SetupGuideProps> = ({ config, pairingState, on
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
 
   const [showTwitchGuide, setShowTwitchGuide] = useState(false);
+  const [showOwnTwitchApp, setShowOwnTwitchApp] = useState(false);
+  // With the bundled Twitch app there is nothing to register: hide Client ID/Secret behind "Advanced".
+  const simpleTwitchLogin = Boolean(config.twitchBuiltInAppAvailable && config.twitchUsesBuiltInApp) && !showOwnTwitchApp;
   const [showSpotifyGuide, setShowSpotifyGuide] = useState(false);
   const [twitchAuthMode, setTwitchAuthMode] = useState<'device' | 'manual'>(() => {
     return (config.twitchTokenConfigured && !config.twitchClientId) ? 'manual' : 'device';
@@ -263,7 +267,7 @@ export const SetupGuide: React.FC<SetupGuideProps> = ({ config, pairingState, on
       const clientId = formData.twitchClientId.trim();
       const clientSecret = formData.twitchClientSecret.trim() || undefined;
       const channel = formData.twitchChannel.trim();
-      if (!clientId) throw new Error(formData.language === 'de'
+      if (!clientId && !config.twitchBuiltInAppAvailable) throw new Error(formData.language === 'de'
         ? 'Bitte zuerst die Client-ID deiner Twitch-Anwendung eingeben.'
         : 'Please enter your Twitch application Client ID first.');
 
@@ -776,11 +780,15 @@ export const SetupGuide: React.FC<SetupGuideProps> = ({ config, pairingState, on
             <div className="rounded-xl border border-purple-500/20 bg-purple-950/20 p-4 space-y-3">
               <div className="flex items-start justify-between gap-3">
                 <p className="text-xs text-neutral-300 leading-relaxed">
-                  {formData.language === 'de'
-                    ? 'Der Bot generiert einen 8-stelligen Code, den du einfach auf Twitch bestätigst. Dafür trägst du einmalig deine Twitch Client-ID ein.'
-                    : 'The bot generates an 8-character code you approve on Twitch. You just need your Twitch Client ID once.'}
+                  {simpleTwitchLogin
+                    ? (formData.language === 'de'
+                      ? 'Klicke auf „Mit Twitch verbinden“, bestätige den angezeigten Code auf Twitch – fertig. Es ist keine Einrichtung bei Twitch nötig.'
+                      : 'Click "Connect with Twitch" and confirm the code shown on Twitch – done. No setup on Twitch is needed.')
+                    : (formData.language === 'de'
+                      ? 'Der Bot generiert einen 8-stelligen Code, den du einfach auf Twitch bestätigst. Dafür trägst du einmalig deine Twitch Client-ID ein.'
+                      : 'The bot generates an 8-character code you approve on Twitch. You just need your Twitch Client ID once.')}
                 </p>
-                <button
+                {!simpleTwitchLogin && <button
                   type="button"
                   onClick={() => setShowTwitchGuide(!showTwitchGuide)}
                   className="text-xs text-purple-300 hover:text-purple-200 inline-flex items-center gap-1 font-semibold shrink-0"
@@ -788,11 +796,11 @@ export const SetupGuide: React.FC<SetupGuideProps> = ({ config, pairingState, on
                   <HelpCircle className="w-3.5 h-3.5" />
                   <span>{formData.language === 'de' ? '1-Minuten-Anleitung' : '1-minute guide'}</span>
                   {showTwitchGuide ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                </button>
+                </button>}
               </div>
 
               {/* Aufklappbare Twitch-Anleitung für Anfänger */}
-              {showTwitchGuide && (
+              {!simpleTwitchLogin && showTwitchGuide && (
                 <div className="rounded-lg bg-neutral-950 border border-purple-500/30 p-3.5 text-xs text-neutral-300 space-y-2">
                   <strong className="text-purple-300 font-semibold block">
                     {formData.language === 'de' ? 'So erstellst du deine kostenlose Twitch Client-ID in 60 Sekunden:' : 'How to create your free Twitch Client ID in 60 seconds:'}
@@ -826,7 +834,7 @@ export const SetupGuide: React.FC<SetupGuideProps> = ({ config, pairingState, on
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {!simpleTwitchLogin && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="twitch-client-id" className="block text-xs font-semibold text-neutral-300 mb-1">
                     Twitch Client-ID <span className="text-purple-400">*</span>
@@ -853,10 +861,26 @@ export const SetupGuide: React.FC<SetupGuideProps> = ({ config, pairingState, on
                     className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-sm font-mono"
                   />
                 </div>
-              </div>
+              </div>}
+
+              {config.twitchBuiltInAppAvailable && config.twitchUsesBuiltInApp && (
+                <p className="text-xs text-amber-100/90 leading-relaxed rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                  {formData.language === 'de'
+                    ? 'Die mitgelieferte Twitch-Anwendung teilt sich ein Anfrage-Limit mit allen, die diese Version nutzen. Auf der Freigabeseite erscheint der Name dieser Anwendung. Wenn die Anmeldung fehlschlägt, Anfragen stocken oder die Verbindung abbricht, öffne „Erweitert“ und trage deine eigene Client-ID ein.'
+                    : 'The included Twitch app shares one request limit with everyone using this version. Twitch’s approval page shows that app’s name. If login fails, requests stall, or the connection drops, open “Advanced” and enter your own Client ID.'}
+                </p>
+              )}
+
+              {config.twitchBuiltInAppAvailable && config.twitchUsesBuiltInApp && (
+                <button type="button" onClick={() => setShowOwnTwitchApp(!showOwnTwitchApp)}
+                  className="text-xs text-neutral-400 hover:text-neutral-200 inline-flex items-center gap-1">
+                  <span>{formData.language === 'de' ? 'Erweitert: eigene Twitch-Anwendung verwenden' : 'Advanced: use my own Twitch app'}</span>
+                  {showOwnTwitchApp ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+              )}
 
               <div className="pt-1 flex items-center gap-3 flex-wrap">
-                {config.twitchTokenConfigured && (
+                {config.twitchTokenConfigured && !simpleTwitchLogin && (
                   <button type="button" onClick={() => void resumeTwitchOAuth()} disabled={twitchOAuth.state === 'pending'}
                     className="px-4 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 text-white text-xs font-bold">
                     {formData.language === 'de' ? 'Secret speichern & Verbindung wiederherstellen' : 'Save secret & restore connection'}
@@ -1333,6 +1357,8 @@ export const SetupGuide: React.FC<SetupGuideProps> = ({ config, pairingState, on
           t={t}
         />
       </section>
+
+      <StreamDeckSetupCard language={formData.language as 'de' | 'en'} />
 
       {saveError && <p role="alert" className="text-xs text-red-400">{saveError}</p>}
 

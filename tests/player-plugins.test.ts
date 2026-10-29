@@ -557,3 +557,54 @@ test('skipCurrent discards unconfirmed queue track when explicitly skipped and f
   assert.equal(queueManager.getQueue().length, 0);
   assert.equal(ytm.skipCalls, 1);
 });
+
+test('skipCurrent keeps a request whose start was not confirmed', async () => {
+  const ytm = new MockPlayerPlugin('youtube_music', 'YTM', 'YTM Player', 'https://music.youtube.com');
+  ytm.acceptPlay = false;
+  const registry = new PlayerPluginRegistry([ytm]);
+  const mockCompanion = {
+    subscribe: () => () => {},
+    getIsConnected: () => true,
+    getIsSimulation: () => true,
+    playTrack: async () => false,
+    skipTrack: async () => true,
+    getStartConfirmationTimeout: () => 50,
+    getLastCommandError: () => ''
+  } as any;
+  const queueManager = new QueueManager(baseConfig, mockCompanion, undefined, registry);
+  const track = makeTrack('pending1');
+  queueManager.addSong(track, track.requester);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const result = await queueManager.skipCurrent('streamer');
+  assert.equal(result.success, false);
+  assert.equal(queueManager.getQueue().length, 1);
+  assert.equal(queueManager.getQueue()[0].videoId, 'pending1');
+  assert.equal(ytm.skipCalls, 0);
+});
+
+test('addSong rejects a Spotify track already playing from an external context', () => {
+  const registry = new PlayerPluginRegistry();
+  const mockCompanion = { subscribe: () => () => {}, getIsConnected: () => true, getIsSimulation: () => true } as any;
+  const queueManager = new QueueManager({ ...baseConfig, playbackProvider: 'spotify' }, mockCompanion, undefined, registry);
+  (queueManager as any).currentTrack = null;
+  (queueManager as any).playbackState = {
+    currentSong: { id: 'spotify-live-abc', spotifyUri: 'spotify:track:abc', playbackProvider: 'spotify', title: 'Live', artist: 'Artist', duration: 180 },
+    source: 'external',
+    isPlaying: true,
+    progressSeconds: 10,
+    durationSeconds: 180,
+    volume: 80
+  };
+  const result = queueManager.addSong({
+    videoId: 'spotify-abc',
+    title: 'Live',
+    artist: 'Artist',
+    duration: 180,
+    thumbnailUrl: '',
+    url: 'https://open.spotify.com/track/abc',
+    requestSource: 'spotify',
+    spotifyUri: 'spotify:track:abc'
+  }, { username: 'viewer1', displayName: 'Viewer One', badge: 'viewer' });
+  assert.equal(result.success, false);
+  assert.equal(queueManager.getQueue().length, 0);
+});

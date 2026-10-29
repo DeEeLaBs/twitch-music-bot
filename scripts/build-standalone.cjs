@@ -3,6 +3,9 @@ const path = require('node:path');
 const { build } = require('esbuild');
 const { builtinModules } = require('node:module');
 
+const PORTABLE_START_SCRIPT = "const path = require('node:path');\nprocess.chdir(path.resolve(__dirname, '..'));\nprocess.env.NODE_ENV = 'production';\nrequire('../dist/server.cjs');\n";
+const PORTABLE_BOOTSTRAP_SCRIPT = "const path = require('node:path');\nconst root = path.resolve(__dirname, '../..');\nprocess.chdir(root);\nrequire(path.join(root, 'scripts/portable-launcher.cjs')).startPortable(root);\n";
+
 function copyDesktopRuntime(source, destination) {
   const signature = path.join(source, 'electron.exe.sig');
   if (!fs.existsSync(signature) || !fs.statSync(signature).size) throw new Error('DRM-Signatur der Desktop-Laufzeit fehlt.');
@@ -30,6 +33,9 @@ async function main() {
   const defines = { 'process.env.NODE_ENV': '"production"', 'process.env.WS_NO_BUFFER_UTIL': '"1"', 'process.env.WS_NO_UTF_8_VALIDATE': '"1"' };
   const results = [];
   results.push(await build({ absWorkingDir: root, entryPoints: ['server.ts'], bundle: true, platform: 'node', format: 'cjs', target: 'node22', outfile: path.join(portable, 'dist/server.cjs'), metafile: true, define: defines, plugins }));
+  // Optional: ship the Stream Deck plugin so the Setup page can install it with one click.
+  const streamDeckIncluded = require('./prepare-streamdeck.cjs').prepare({ root, outDir: path.join(portable, 'dist'), pack: true });
+  console.log(streamDeckIncluded ? 'Stream-Deck-Plugin ist enthalten.' : 'Stream-Deck-Plugin ist NICHT enthalten (siehe Warnung oben).');
   fs.mkdirSync(path.join(portable, 'desktop'));
   results.push(await build({ absWorkingDir: root, entryPoints: ['desktop/main.cjs'], bundle: true, platform: 'node', format: 'cjs', outfile: path.join(portable, 'desktop/main.cjs'), external: ['electron'], metafile: true, define: defines, plugins }));
   const builtins = new Set(builtinModules);
@@ -46,16 +52,16 @@ async function main() {
   fs.writeFileSync(path.join(portable, 'runtime/LICENSE.txt'), await licenseResponse.text());
   fs.mkdirSync(path.join(portable, 'scripts'));
   fs.copyFileSync(path.join(root, 'scripts/portable-launcher.cjs'), path.join(portable, 'scripts/portable-launcher.cjs'));
-  fs.writeFileSync(path.join(portable, 'scripts/start.cjs'), "const path = require('node:path');\nprocess.chdir(path.resolve(__dirname, '..'));\nprocess.env.NODE_ENV = 'production';\nrequire('../dist/server.cjs');\n");
+  fs.writeFileSync(path.join(portable, 'scripts/start.cjs'), PORTABLE_START_SCRIPT);
   const appDirectory = path.join(portable, 'resources/app');
   fs.mkdirSync(appDirectory, { recursive: true });
   fs.writeFileSync(path.join(appDirectory, 'package.json'), JSON.stringify({ name: 'musicbot-portable', version: pkg.version, main: 'bootstrap.cjs' }, null, 2));
-  fs.writeFileSync(path.join(appDirectory, 'bootstrap.cjs'), "const path = require('node:path');\nconst root = path.resolve(__dirname, '../..');\nprocess.chdir(root);\nrequire(path.join(root, 'scripts/portable-launcher.cjs')).startPortable(root);\n");
+  fs.writeFileSync(path.join(appDirectory, 'bootstrap.cjs'), PORTABLE_BOOTSTRAP_SCRIPT);
   fs.writeFileSync(path.join(portable, 'Start-MusicBot.bat'), '@echo off\r\ncd /d "%~dp0"\r\nset ELECTRON_RUN_AS_NODE=\r\nset NODE_OPTIONS=\r\nstart "" "%~dp0MusicBot.exe"\r\n');
   fs.writeFileSync(path.join(portable, 'package.json'), JSON.stringify({ name: pkg.name, version: pkg.version, private: true, type: 'module' }, null, 2));
   fs.mkdirSync(path.join(portable, 'data'));
   fs.cpSync(path.join(root, 'plugins'), path.join(portable, 'plugins'), { recursive: true });
-  fs.writeFileSync(path.join(portable, 'BUILD-INFO.json'), JSON.stringify({ version: pkg.version, builtAt: stamp, node: process.version, electron: fs.readFileSync(path.join(electronRuntime, 'version'), 'utf8').trim(), platform: process.platform, arch: process.arch, desktopIncluded: true }, null, 2));
+  fs.writeFileSync(path.join(portable, 'BUILD-INFO.json'), JSON.stringify({ version: pkg.version, builtAt: stamp, node: process.version, electron: fs.readFileSync(path.join(electronRuntime, 'version'), 'utf8').trim(), platform: process.platform, arch: process.arch, desktopIncluded: true, streamDeckPluginIncluded: streamDeckIncluded }, null, 2));
   const licenses = path.join(portable, 'licenses');
   fs.mkdirSync(licenses);
   function collect(dir, prefix = '') {
@@ -81,4 +87,4 @@ async function main() {
   console.log(`\nStandalone erfolgreich erstellt:\n${output}`);
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { main, copyDesktopRuntime };
+module.exports = { main, copyDesktopRuntime, PORTABLE_START_SCRIPT, PORTABLE_BOOTSTRAP_SCRIPT };

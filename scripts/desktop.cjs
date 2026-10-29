@@ -24,7 +24,7 @@ async function waitForServer(timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (await isServerRunning()) return true;
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 100));
   }
   return false;
 }
@@ -71,10 +71,13 @@ async function main() {
   let serverChild = null;
   if (!alreadyRunning) {
     console.log('Starting Twitch Music Bot server...');
-    serverChild = spawnSafe('npm', ['run', 'dev'], {
-      cwd: root,
-      stdio: 'inherit'
-    });
+    // Default: the prebuilt production bundle (start.cjs rebuilds it only when sources changed).
+    // It skips npm.cmd, tsx and the Vite dev server, which cost ~2 s on every launch.
+    // Use `npm run desktop:dev` (or MUSICBOT_DEV=1) for the hot-reloading dev server.
+    const devMode = process.argv.includes('--dev') || process.env.MUSICBOT_DEV === '1';
+    serverChild = devMode
+      ? spawnSafe('npm', ['run', 'dev'], { cwd: root, stdio: 'inherit' })
+      : spawn(process.execPath, [path.join(root, 'scripts', 'start.cjs')], { cwd: root, stdio: 'inherit' });
 
     serverChild.on('error', err => {
       console.error('Failed to spawn server process:', err);
@@ -88,9 +91,10 @@ async function main() {
       process.exit(code ?? 0);
     });
 
-    const ready = await waitForServer(15000);
+    // A stale build is rebuilt first (~5 s, longer if dependencies need repair), so allow more time.
+    const ready = await waitForServer(90000);
     if (!ready) {
-      console.error('Server did not become ready on port 3000 within 15 seconds.');
+      console.error('Server did not become ready on port 3000 within 90 seconds.');
       if (serverChild) serverChild.kill();
       process.exit(1);
     }

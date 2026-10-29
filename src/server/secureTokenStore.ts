@@ -11,6 +11,24 @@ interface SecretFileV2 { version: 2; values: Partial<Record<SecretKey, StoredSec
 interface SecretFileV1 { version: 1; mode: SecretMode; values: Partial<Record<SecretKey, string>>; salt?: string; }
 type SecretFile = SecretFileV1 | SecretFileV2;
 
+export type SecretStoreProblem = 'key-missing' | 'key-invalid' | 'store-unreadable' | 'decrypt-failed';
+const PROBLEM_MESSAGES: Record<SecretStoreProblem, string> = {
+  'key-missing': 'The encryption key file (.secret-key) for the stored credentials is missing.',
+  'key-invalid': 'The encryption key file (.secret-key) for the stored credentials is damaged.',
+  'store-unreadable': 'The stored credentials file (secrets.json) is unreadable and no usable backup exists.',
+  'decrypt-failed': 'The stored credentials cannot be decrypted with the available encryption key.'
+};
+
+/** Raised instead of replacing key material or credential files that may still be recoverable. */
+export class SecretStoreError extends Error {
+  readonly code: SecretStoreProblem;
+  constructor(code: SecretStoreProblem) {
+    super(PROBLEM_MESSAGES[code]);
+    this.name = 'SecretStoreError';
+    this.code = code;
+  }
+}
+
 /**
  * Stores bot credentials outside bot-config.json.
  *
@@ -20,6 +38,11 @@ type SecretFile = SecretFileV1 | SecretFileV2;
  * installation. If DPAPI is unavailable for any reason, only the affected
  * secret falls back to AES-GCM with a local 256-bit key so saving settings can
  * never prevent the bot from starting or connecting.
+ *
+ * Existing credentials are never discarded to make room for new ones. A missing
+ * or damaged key, or an unreadable secrets file, is reported through
+ * SecretStoreError; the original files stay untouched until the user explicitly
+ * starts over, which moves them aside (archiveUnrecoverable).
  */
 export class SecureTokenStore {
   private file: string;
@@ -28,7 +51,7 @@ export class SecureTokenStore {
   // This avoids PowerShell/.NET DPAPI compatibility problems on Windows.
   private preferredMode: SecretMode = 'local-aes';
   private lastError = '';
-  private cachedLocalKey: Buffer | null = null;
+  private readState: 'ok' | 'recovered' | 'unreadable' = 'ok';
 
   constructor(
     file = path.join(process.cwd(), 'data', 'secrets.json'),
@@ -83,15 +106,23 @@ export class SecureTokenStore {
     return Buffer.concat([iv, tag, enc]).toString('base64');
   }
 
+  private decryptLocal(value: string, key: Buffer): string {
+    try {
+      const all = Buffer.from(value, 'base64');
+      if (all.length < 29) throw new Error('Local secret payload is invalid.');
+      const iv = all.subarray(0, 12);
+      const tag = all.subarray(12, 28);
+      const enc = all.subarray(28);
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAuthTag(tag);
+      return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+    } catch {
+      throw new SecretStoreError('decrypt-failed');
+    }
+  }
+
   private unprotectLocal(value: string): string {
-    const all = Buffer.from(value, 'base64');
-    if (all.length < 29) throw new Error('Local secret payload is invalid.');
-    const iv = all.subarray(0, 12);
-    const tag = all.subarray(12, 28);
-    const enc = all.subarray(28);
-    const decipher = crypto.createDecipheriv('aes-256-gcm', this.localKey(), iv);
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+    return this.decryptLocal(value, this.existingKey());
   }
 
   private protect(value: string): StoredSecret {
@@ -107,73 +138,142 @@ export class SecureTokenStore {
     return this.unprotectLocal(secret.value);
   }
 
-  private localKey(): Buffer {
-    if (this.cachedLocalKey && this.cachedLocalKey.length === 32) return this.cachedLocalKey;
-    fs.mkdirSync(path.dirname(this.keyFile), { recursive: true });
-    if (!fs.existsSync(this.keyFile)) fs.writeFileSync(this.keyFile, crypto.randomBytes(32), { mode: 0o600 });
-    let key = fs.readFileSync(this.keyFile);
-    if (key.length !== 32) {
-      // A damaged key cannot decrypt old local secrets, but replacing it is
-      // preferable to permanently preventing settings from being saved.
-      key = crypto.randomBytes(32);
-      fs.writeFileSync(this.keyFile, key, { mode: 0o600 });
-      this.lastError = 'Lokaler Secret-Schlüssel war beschädigt und wurde neu erstellt.';
-    }
-    this.cachedLocalKey = key;
+  /** Reads the key without ever creating or replacing it. */
+  private existingKey(): Buffer {
+    if (!fs.existsSync(this.keyFile)) throw new SecretStoreError('key-missing');
+    const key = fs.readFileSync(this.keyFile);
+    if (key.length !== 32) throw new SecretStoreError('key-invalid');
     return key;
+  }
+
+  /** Creates the key only when none exists; an existing key is never overwritten. */
+  private localKey(): Buffer {
+    if (!fs.existsSync(this.keyFile)) {
+      fs.mkdirSync(path.dirname(this.keyFile), { recursive: true });
+      try {
+        fs.writeFileSync(this.keyFile, crypto.randomBytes(32), { mode: 0o600, flag: 'wx' });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+    }
+    return this.existingKey();
+  }
+
+  private parseSecretFile(file: string): { data: SecretFileV2; legacy: boolean } | null {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as SecretFile;
+      if (parsed?.version === 2 && parsed.values && typeof parsed.values === 'object') return { data: parsed, legacy: false };
+      if (parsed?.version === 1 && parsed.values && typeof parsed.values === 'object') {
+        // v1 used one encryption mode for the entire file. Convert the shape
+        // without re-encrypting; values are migrated on their next update.
+        const values: SecretFileV2['values'] = {};
+        for (const key of ['twitchBotOauthToken', 'twitchRefreshToken', 'twitchTokenExpiresAt', 'twitchClientSecret', 'ytmdaAuthToken', 'spotifyRefreshToken'] as SecretKey[]) {
+          const value = parsed.values[key];
+          if (typeof value === 'string' && value) values[key] = { mode: parsed.mode, value };
+        }
+        return { data: { version: 2, values }, legacy: true };
+      }
+    } catch { /* handled by the caller */ }
+    return null;
   }
 
   private readFile(): SecretFileV2 {
     // Multiple services share this file. Read the latest contents before each
     // access so one service cannot overwrite credentials saved by another.
-    try {
-      if (fs.existsSync(this.file)) {
-        const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8')) as SecretFile;
-        if (parsed?.version === 2 && parsed.values && typeof parsed.values === 'object') {
-          return parsed;
-        }
-        if (parsed?.version === 1 && parsed.values && typeof parsed.values === 'object') {
-          // v1 used one encryption mode for the entire file. Convert the shape
-          // without re-encrypting; values are migrated on their next update.
-          const values: SecretFileV2['values'] = {};
-          for (const key of ['twitchBotOauthToken', 'twitchRefreshToken', 'twitchTokenExpiresAt', 'twitchClientSecret', 'ytmdaAuthToken', 'spotifyRefreshToken'] as SecretKey[]) {
-            const value = parsed.values[key];
-            if (typeof value === 'string' && value) values[key] = { mode: parsed.mode, value };
-          }
-          const migrated: SecretFileV2 = { version: 2, values };
-          writeJson(this.file, migrated);
-          return migrated;
-        }
-      }
-    } catch (error) {
-      this.lastError = `Secret-Datei konnte nicht gelesen werden: ${String(error)}`;
+    this.readState = 'ok';
+    if (!fs.existsSync(this.file)) return { version: 2, values: {} };
+    const current = this.parseSecretFile(this.file);
+    if (current) {
+      if (current.legacy) { try { writeJson(this.file, current.data); } catch { /* migrated again on the next read */ } }
+      return current.data;
     }
-    const empty: SecretFileV2 = { version: 2, values: {} };
-    return empty;
+    const backup = fs.existsSync(this.file + '.backup') ? this.parseSecretFile(this.file + '.backup') : null;
+    if (backup) {
+      this.readState = 'recovered';
+      this.lastError = 'Secret-Datei war beschädigt; die Zugangsdaten wurden aus der Sicherung gelesen.';
+      return backup.data;
+    }
+    this.readState = 'unreadable';
+    this.lastError = 'Secret-Datei konnte nicht gelesen werden.';
+    return { version: 2, values: {} };
+  }
+
+  private assess(): { data: SecretFileV2; problem?: SecretStoreProblem } {
+    const data = this.readFile();
+    if (this.readState === 'unreadable') return { data, problem: 'store-unreadable' };
+    const local = Object.values(data.values).filter(secret => secret?.mode === 'local-aes' && secret.value);
+    if (!local.length) return { data };
+    try {
+      const key = this.existingKey();
+      for (const secret of local) this.decryptLocal(secret!.value, key);
+    } catch (error) {
+      return { data, problem: error instanceof SecretStoreError ? error.code : 'decrypt-failed' };
+    }
+    return { data };
+  }
+
+  /** Reports why stored credentials cannot be used, without modifying anything. */
+  public problem(): SecretStoreProblem | undefined {
+    return this.assess().problem;
+  }
+
+  /** Like get(), but tells "nothing stored" apart from "stored but unusable". */
+  public read(key: SecretKey): { value: string; problem?: SecretStoreProblem } {
+    const data = this.readFile();
+    if (this.readState === 'unreadable') return { value: '', problem: 'store-unreadable' };
+    const secret = data.values[key];
+    if (!secret) return { value: '' };
+    try {
+      const value = this.unprotect(secret);
+      if (this.readState === 'ok') this.lastError = '';
+      return { value };
+    } catch (error) {
+      const problem = error instanceof SecretStoreError ? error.code : 'decrypt-failed';
+      this.lastError = `Gespeichertes Secret konnte nicht entschlüsselt werden: ${PROBLEM_MESSAGES[problem]}`;
+      return { value: '', problem };
+    }
   }
 
   get(key: SecretKey): string {
-    const secret = this.readFile().values[key];
-    if (!secret) return '';
-    try {
-      const value = this.unprotect(secret);
-      this.lastError = '';
-      return value;
-    } catch (error) {
-      this.lastError = `Gespeichertes Secret konnte nicht entschlüsselt werden: ${String(error)}`;
-      return '';
-    }
+    return this.read(key).value;
   }
 
   set(key: SecretKey, value: string): void {
-    const data = this.readFile();
+    const { data, problem } = this.assess();
+    if (problem) throw new SecretStoreError(problem);
+    const recovered = this.readState === 'recovered';
+    // The damaged original stays on disk; the rewritten file replaces it only
+    // after a copy exists and without rotating the good backup away.
+    if (recovered) fs.copyFileSync(this.file, `${this.file}.corrupt-${Date.now()}`);
     if (value) data.values[key] = this.protect(value);
     else delete data.values[key];
-    writeJson(this.file, data);
+    writeJson(this.file, data, { preserveBackup: recovered });
+  }
+
+  /**
+   * Moves unusable credential files aside so the user can sign in again. Nothing
+   * is deleted or overwritten; the renamed files keep every byte for a later manual restore.
+   */
+  public archiveUnrecoverable(): string[] {
+    const problem = this.problem();
+    if (!problem) return [];
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const moved: string[] = [];
+    const moveAside = (file: string) => {
+      if (!fs.existsSync(file)) return;
+      const target = `${file}.unrecoverable-${stamp}`;
+      fs.renameSync(file, target);
+      moved.push(target);
+    };
+    moveAside(this.file);
+    moveAside(this.file + '.backup');
+    if (problem === 'key-invalid') moveAside(this.keyFile);
+    this.lastError = '';
+    return moved;
   }
 
   diagnostics() {
-    const data = this.readFile();
+    const { data, problem } = this.assess();
     const modes = Object.fromEntries(Object.entries(data.values).map(([key, secret]) => [key, secret?.mode]));
     return {
       preferredMode: this.preferredMode,
@@ -181,6 +281,7 @@ export class SecureTokenStore {
       fileExists: fs.existsSync(this.file),
       fallbackActive: false,
       storageMode: 'local-aes',
+      problem,
       lastError: this.lastError || undefined
     };
   }

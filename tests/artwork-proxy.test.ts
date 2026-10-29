@@ -21,6 +21,30 @@ async function withProxy(run: (request: () => Promise<number>) => Promise<void>)
   finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 }
 
+test('artwork proxy rejects parent domains outside the known image hosts', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls++; throw new Error('should not fetch'); });
+  const app = express();
+  app.use(createArtworkProxyRouter());
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const statusFor = (url: string) => new Promise<number>((resolve, reject) => {
+    http.get(`http://127.0.0.1:${address.port}/artwork-proxy?url=${encodeURIComponent(url)}`, response => {
+      response.resume();
+      response.on('end', () => resolve(response.statusCode!));
+    }).on('error', reject);
+  });
+  try {
+    assert.equal(await statusFor('https://youtube.com/image'), 403);
+    assert.equal(await statusFor('https://i.ytimg.com/vi/test/hqdefault.jpg'), 502);
+    assert.equal(calls, 1);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
 test('failed artwork downloads return 502 without unhandled rejection and can retry', async t => {
   let calls = 0;
   t.mock.method(globalThis, 'fetch', async () => { calls++; throw new Error('upstream unavailable'); });

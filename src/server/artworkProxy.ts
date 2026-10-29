@@ -8,9 +8,7 @@ export function createArtworkProxyRouter() {
   // issues and also prevents stale remote cache behaviour from breaking the Control Center.
   const artworkHosts = [
     'i.scdn.co', 'image-cdn-ak.spotifycdn.com', 'mosaic.scdn.co',
-    'yt3.ggpht.com', 'i.ytimg.com', 'img.youtube.com', 'lh3.googleusercontent.com',
-    'ytimg.com', 'googleusercontent.com', 'spotifycdn.com', 'scdn.co',
-    'ggpht.com', 'youtube.com'
+    'yt3.ggpht.com', 'i.ytimg.com', 'img.youtube.com', 'lh3.googleusercontent.com'
   ];
   function isAllowedArtworkHost(hostname: string) {
     const host = hostname.toLowerCase();

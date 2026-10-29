@@ -51,7 +51,21 @@ test('HTTP API exposes health and stable auth error codes', async () => {
   });
 });
 
-test('HTTP API exposes the Twitch OAuth device-login routes', async () => {
+test('Twitch login without a typed Client ID uses the bundled/saved app', async t => {
+  const started: Array<string | undefined> = [];
+  t.mock.method(botService, 'getTwitchClientId', () => 'builtinclientid0123456789abcdef');
+  t.mock.method(botService, 'startTwitchOAuth', async (clientId: string) => { started.push(clientId); return { state: 'pending' } as never; });
+  await withApi(async (baseUrl, sessionToken) => {
+    const start = await fetch(`${baseUrl}/api/twitch/oauth/start`, {
+      method:'POST', headers:{'Content-Type':'application/json','X-Bot-Session':sessionToken}, body:JSON.stringify({})
+    });
+    assert.equal(start.status, 200);
+    assert.deepEqual(started, ['builtinclientid0123456789abcdef']);
+  });
+});
+
+test('HTTP API exposes the Twitch OAuth device-login routes', async t => {
+  t.mock.method(botService, 'getTwitchClientId', () => '');
   await withApi(async (baseUrl, sessionToken) => {
     const status = await fetch(`${baseUrl}/api/twitch/oauth/status`);
     assert.equal(status.status, 200);
@@ -65,7 +79,7 @@ test('HTTP API exposes the Twitch OAuth device-login routes', async () => {
     assert.equal(start.status, 400);
     const startJson = await start.json() as { code:string; error:string };
     assert.equal(startJson.code, 'VALIDATION');
-    assert.match(startJson.error, /Client-ID/);
+    assert.match(startJson.error, /Client-ID|Twitch-Anwendung/);
   });
 });
 
@@ -162,3 +176,17 @@ test('Spotify skip returns its own error and connection instead of YouTube state
      });
    } finally {botService.getStreamPlaylistService=original;await fs.rm(directory,{recursive:true,force:true});}
  });
+
+test('Stream Deck routes report status and refuse installs without a valid session', async () => {
+  await withApi(async baseUrl => {
+    const status = await fetch(`${baseUrl}/api/streamdeck/status`);
+    assert.equal(status.status, 200);
+    const body = await status.json() as { success: boolean; state: string; bundledVersion: string | null };
+    assert.equal(body.success, true);
+    assert.ok(['not-bundled', 'streamdeck-missing', 'not-installed', 'update-available', 'up-to-date'].includes(body.state));
+    // Never call the real install here: with a valid session it would launch the Stream Deck installer.
+    const denied = await fetch(`${baseUrl}/api/streamdeck/install`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json() as { code: string }).code, 'AUTH_REQUIRED');
+  });
+});

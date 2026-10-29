@@ -22,3 +22,15 @@ test('designer exposes the all-text centering switch and restores the saved alig
     assert.match(html, new RegExp(`overlay-align-${textAlign}`));
   }
 });
+
+test('designer groups its settings into tabs and keeps the editing tools next to the preview', () => {
+  (globalThis as any).window = { localStorage: { getItem: () => null }, location: { origin: 'http://localhost:3000', search: '' } };
+  const html = renderToStaticMarkup(React.createElement(OverlayStudio, { language: 'de', playback: { isPlaying: false } }));
+  const tabs = [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map(match => match[0]);
+  assert.equal(tabs.length, 6);
+  assert.equal(tabs.filter(tab => tab.includes('aria-selected="true"')).length, 1);
+  assert.equal((html.match(/role="tabpanel"/g) || []).length, 6, 'inactive panels stay mounted (hidden) so their state survives');
+  const preview = html.slice(html.indexOf('studio-preview-column'));
+  assert.match(preview, /Elemente verschieben/, 'free positioning lives in the preview toolbar');
+  assert.match(preview, /id="overlay-url"/, 'the OBS link sits under the preview');
+});

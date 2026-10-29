@@ -13,7 +13,7 @@ test('playlist playback sends a context to the selected Spotify device and rejec
   service.api = async (path: string, options: RequestInit) => {
     calls.push(path);
     if (path.includes('/shuffle?')) {
-      assert.equal(path, '/me/player/shuffle?state=true&device_id=web-player');
+      assert.match(path, /^\/me\/player\/shuffle\?state=(?:true|false)&device_id=web-player$/);
       assert.equal(options.method, 'PUT');
       return new Response(null, { status: 204 });
     }
@@ -22,7 +22,11 @@ test('playlist playback sends a context to the selected Spotify device and rejec
     return new Response(null, { status: 204 });
   };
   assert.equal(await service.playPlaylist(uri), true);
-  assert.equal(calls.length, 2);
+  assert.deepEqual(calls, [
+    '/me/player/play?device_id=web-player',
+    '/me/player/shuffle?state=false&device_id=web-player',
+    '/me/player/shuffle?state=true&device_id=web-player'
+  ]);
   service.api = async (path: string) => new Response(null, { status: path.includes('/shuffle?') ? 403 : 204 });
   await assert.rejects(service.playPlaylist(uri), /Shuffle fehlgeschlagen/);
   service.api = async () => new Response(null, { status: 403 });
@@ -434,7 +438,7 @@ test('repeated skips inside the Spotify fallback playlist advance without restar
   assert.equal(playlistStarts, 0);
 });
 
-test('Spotify playlist shuffle is enabled before starting its playback context', async () => {
+test('Spotify playlist shuffle is toggled after the playback context starts', async () => {
   const service: any = Object.create(SpotifyService.prototype);
   service.isReadyForPlayback = () => true;
   service.targetDeviceId = async () => 'device';
@@ -442,9 +446,16 @@ test('Spotify playlist shuffle is enabled before starting its playback context',
   const calls: string[] = [];
   service.api = async (path: string) => { calls.push(path); return new Response(null, { status: 204 }); };
   await service.playPlaylist(uri);
-  assert.deepEqual(calls, ['/me/player/shuffle?state=true&device_id=device', '/me/player/play?device_id=device']);
+  assert.deepEqual(calls, [
+    '/me/player/play?device_id=device',
+    '/me/player/shuffle?state=false&device_id=device',
+    '/me/player/shuffle?state=true&device_id=device'
+  ]);
   calls.length = 0;
-  service.api = async (path: string) => { calls.push(path); return new Response(null, { status: 403 }); };
+  service.api = async (path: string) => { calls.push(path); return new Response(null, { status: path.includes('/shuffle?') ? 403 : 204 }); };
   await assert.rejects(service.playPlaylist(uri), /Shuffle fehlgeschlagen/);
-  assert.deepEqual(calls, ['/me/player/shuffle?state=true&device_id=device']);
+  assert.deepEqual(calls, [
+    '/me/player/play?device_id=device',
+    '/me/player/shuffle?state=false&device_id=device'
+  ]);
 });

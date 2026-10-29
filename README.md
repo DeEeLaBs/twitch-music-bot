@@ -107,6 +107,7 @@ npm start
 ```
 
 `npm run dev` startet den Entwicklungsserver. `npm start` verwendet den Produktionsbuild. Nach Quellcodeänderungen erneut bauen.
+`npm run desktop` (und `MusicBot starten.cmd`) startet den Produktionsbuild und baut nur bei geänderten Quellen neu (ca. 5 s); `npm run desktop:dev` startet stattdessen den Entwicklungsserver mit Hot-Reload.
 Die Tests verwenden kontrollierte Player-/HTTP-Antworten für Autorisierung, Queue-Übergänge, Suche und Fehlerfälle; sie sind kein Ersatz für den lokalen Test mit den echten Apps.
 
 API-Referenz: https://github.com/ytmdesktop/ytmdesktop/wiki/v2-%E2%80%90-Companion-Server-API-v1
@@ -140,3 +141,6 @@ Die Spotify-Anmeldung erfolgt im Setup per OAuth. Bei ausgewähltem Spotify-Play
 `MusicBot starten.cmd` ist der zentrale Einstiegspunkt. Der Starter prüft bzw. startet zuerst den lokalen Server auf `127.0.0.1:3000`, wartet auf `/api/health` und öffnet erst danach die Desktop-Oberfläche. Das Dashboard ist die Standardansicht; YouTube Music und Spotify werden im Web-Player-Bereich entsprechend der aktiven Player-Auswahl angezeigt.
 
 Bei einem fehlgeschlagenen Start stehen die Prozessausgaben unter `data/server-stderr.log` und `data/server-stdout.log`.
+
+## Stream Deck
+Das Setup enthält die Karte **Elgato Stream Deck**: Ein Klick öffnet das mitgelieferte Plugin in der Stream-Deck-App (diese fragt nach der Bestätigung); bei einer neueren Plugin-Version erscheint „Update verfügbar“. Das Plugin wird mit `npm run streamdeck:pack` bzw. automatisch von `npm run build:standalone` gebaut. Details: `streamdeck-plugin/README.md`.

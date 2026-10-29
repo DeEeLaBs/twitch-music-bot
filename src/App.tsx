@@ -1,5 +1,5 @@
-import React, { Suspense, lazy, useCallback, useEffect, useState, useRef } from 'react';
-import { Activity, AlertTriangle, Headphones, Loader2, MessageSquare, Music2, PanelTopOpen, Settings, Tv, Play, SlidersHorizontal, GripVertical, Sparkles, X } from 'lucide-react';
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useState, useRef } from 'react';
+import { Activity, AlertTriangle, Bell, Headphones, Loader2, MessageSquare, Music2, PanelTopOpen, Settings, Tv, Play, SlidersHorizontal, GripVertical, X } from 'lucide-react';
 import type { BadgeType, BotConfig } from './types.ts';
 import { BOT_QUOTES, getRandomQuoteIndex } from './quotes.ts';
 import { NowPlayingCard } from './components/NowPlayingCard.tsx';
@@ -7,19 +7,21 @@ import { StreamPlaylistPanel } from './components/StreamPlaylistPanel.tsx';
 import { QueueList } from './components/QueueList.tsx';
 import { localizeBackendMessage, useTranslations } from './translations.ts';
 import { ChatSimulator } from './components/ChatSimulator.tsx';
-import { OverlayWidget } from './components/OverlayWidget.tsx';
 import { ObsPlayerDock } from './components/ObsPlayerDock.tsx';
-import { parseOverlayOptions } from './overlayOptions.ts';
+import { ObsOverlayPage } from './components/ObsOverlayPage.tsx';
 import { parseDockOptions } from './dockOptions.ts';
 import { apiFetch } from './apiClient.ts';
 import { useBotState } from './hooks/useBotState.ts';
 import { useStreamerAvatar } from './hooks/useStreamerAvatar.ts';
+import { SpotifyBrowserPlayer } from './components/SpotifyBrowserPlayer.tsx';
 
 const CommandRulesStudio = lazy(() => import('./components/CommandRulesStudio.tsx').then(m => ({ default: m.CommandRulesStudio })));
-const OverlayStudio = lazy(() => import('./components/OverlayStudio.tsx').then(m=>({default:m.OverlayStudio})));
+const OverlayEditor = lazy(() => import('./components/OverlayEditor.tsx').then(m => ({ default: m.OverlayEditor })));
+const AlertCreatorStudio = lazy(() => import('./components/alert-creator/AlertCreatorStudio.tsx').then(m => ({ default: m.AlertCreatorStudio })));
 const SetupGuide = lazy(() => import('./components/SetupGuide.tsx').then(m=>({default:m.SetupGuide})));
 const DiagnosticsPanel = lazy(() => import('./components/DiagnosticsPanel.tsx').then(m=>({default:m.DiagnosticsPanel})));
 const ObsDockStudio = lazy(() => import('./components/ObsDockStudio.tsx').then(m => ({ default: m.ObsDockStudio || m.default })));
+const AlertObsPage = lazy(() => import('./components/AlertObsPage.tsx').then(m => ({ default: m.AlertObsPage })));
 const LazyFallback=()=> <div className="p-6 text-sm text-neutral-400">Loading…</div>;
 
 type TabErrorBoundaryProps = { name: string; children: React.ReactNode };
@@ -50,7 +52,7 @@ class TabErrorBoundary extends React.Component<TabErrorBoundaryProps, TabErrorBo
   }
 }
 
-type AppTab = 'player' | 'webPlayer' | 'commands' | 'chat' | 'overlay' | 'obsDock' | 'diagnostics' | 'settings';
+type AppTab = 'player' | 'webPlayer' | 'commands' | 'chat' | 'overlay' | 'alertCreator' | 'obsDock' | 'diagnostics' | 'settings';
 
 const DEFAULT_TAB_ORDER: AppTab[] = [
   'player',
@@ -58,6 +60,7 @@ const DEFAULT_TAB_ORDER: AppTab[] = [
   'commands',
   'chat',
   'overlay',
+  'alertCreator',
   'obsDock',
   'diagnostics',
   'settings'
@@ -66,6 +69,10 @@ const DEFAULT_TAB_ORDER: AppTab[] = [
 function sanitizeTabOrder(raw: unknown): AppTab[] {
   if (!Array.isArray(raw)) return [...DEFAULT_TAB_ORDER];
   const valid = raw.filter((id): id is AppTab => id !== 'blacklist' && DEFAULT_TAB_ORDER.includes(id as AppTab));
+  if (!valid.includes('alertCreator')) {
+    const overlayAt = valid.indexOf('overlay');
+    valid.splice(overlayAt >= 0 ? overlayAt + 1 : valid.length, 0, 'alertCreator');
+  }
   for (const defaultTab of DEFAULT_TAB_ORDER) {
     if (!valid.includes(defaultTab)) {
       valid.push(defaultTab);
@@ -97,11 +104,14 @@ const WebviewContainer = ({
   const wvRef = useRef<any>(null);
   const skipRef = useRef(onUserSkip);
   skipRef.current = onUserSkip;
-  const [loading, setLoading] = useState(true);
+  const supportsWebview = typeof document !== 'undefined' && typeof (document.createElement('webview') as { reload?: unknown }).reload === 'function';
+  const [loading, setLoading] = useState(supportsWebview);
   const [loadError, setLoadError] = useState('');
-  
+  const playerName = src.includes('spotify') ? 'Spotify' : 'YouTube Music';
+  const english = typeof document !== 'undefined' && document.documentElement.lang === 'en';
+
   useEffect(() => {
-    if (!webviewHostRef.current) return;
+    if (!supportsWebview || !webviewHostRef.current) return;
     const wv = document.createElement('webview') as any;
     wvRef.current = wv;
     if (id) wv.id = id;
@@ -121,6 +131,7 @@ const WebviewContainer = ({
     
     let disposed = false;
     let navigationFailed = false;
+    let documentFinished = false;
     let readyFrame = 0;
     const cancelReadyFrame = () => cancelAnimationFrame(readyFrame);
     interface WebviewNavigationEvent extends Event {
@@ -144,11 +155,13 @@ const WebviewContainer = ({
       if (!navEvent.isMainFrame || navEvent.isInPlace) return;
       cancelReadyFrame();
       navigationFailed = false;
+      documentFinished = false;
       setLoading(true);
       setLoadError('');
     };
     const handleLoadReady = () => {
       if (navigationFailed) return;
+      documentFinished = true;
       cancelReadyFrame();
       // Uncover the document without waiting for images and other late resources.
       readyFrame = requestAnimationFrame(() => {
@@ -174,14 +187,18 @@ const WebviewContainer = ({
     const handleContentReady = (event: Event) => {
       const ipcEvent = event as WebviewIpcMessageEvent;
       if (ipcEvent.channel === 'player-content-ready') handleLoadReady();
-      if (ipcEvent.channel === 'player-content-timeout') handleLoadFailure({
-        errorDescription: 'Die Player-Oberfläche antwortet nicht. Bitte den Player neu laden.'
-      });
+      if (ipcEvent.channel === 'player-content-timeout') {
+        if (documentFinished || navigationFailed) return;
+        handleLoadFailure({
+          errorDescription: 'Die Player-Oberfläche antwortet nicht. Bitte den Player neu laden.'
+        });
+      }
       if (ipcEvent.channel === 'player-user-skip') {
         skipRef.current?.();
       }
     };
     wv.addEventListener('ipc-message', handleContentReady);
+    wv.addEventListener('did-finish-load', handleLoadReady);
     wv.addEventListener('did-fail-load', handleLoadFailure);
     // Install listeners before attachment so fast cached loads cannot be missed.
     setLoading(true);
@@ -215,7 +232,7 @@ const WebviewContainer = ({
       } catch {}
       wvRef.current = null;
     };
-  }, [src, useragent, id]);
+  }, [src, useragent, id, supportsWebview]);
 
   useEffect(() => {
     if (!visible || !wvRef.current) return;
@@ -240,7 +257,23 @@ const WebviewContainer = ({
       {/* Keep the imperative Electron element in its own React-owned host.
           Otherwise rendering the loader can reconcile the webview away. */}
       <div ref={webviewHostRef} className="absolute inset-0" />
-      {visible && (loading || loadError) && (
+      {visible && !supportsWebview && src.includes('spotify') && <SpotifyBrowserPlayer />}
+      {visible && !supportsWebview && !src.includes('spotify') && (
+        <div className="absolute inset-0 z-20 grid place-items-center bg-neutral-950 text-neutral-300 p-6">
+          <div className="flex max-w-md flex-col items-center gap-3 text-center text-sm">
+            <Headphones className="w-7 h-7 text-purple-400" aria-hidden="true" />
+            <p>
+              {english
+                ? `${playerName} cannot be embedded in the browser dashboard. Open it in its own tab. The desktop app keeps the player here.`
+                : `${playerName} kann im Browser-Dashboard nicht eingebettet werden. Öffne den Player in einem eigenen Tab. In der Desktop-App bleibt er hier.`}
+            </p>
+            <a href={src} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-lg bg-purple-600 px-4 py-2 font-semibold text-white hover:bg-purple-500">
+              {english ? `Open ${playerName}` : `${playerName} öffnen`}
+            </a>
+          </div>
+        </div>
+      )}
+      {visible && supportsWebview && (loading || loadError) && (
         <div className="absolute inset-0 z-20 grid place-items-center bg-neutral-950 text-neutral-300">
           <div className="flex flex-col items-center gap-3 text-sm">
             {loading ? <Loader2 className="w-7 h-7 animate-spin text-purple-400" /> : <AlertTriangle className="w-7 h-7 text-amber-400" />}
@@ -254,7 +287,10 @@ const WebviewContainer = ({
 
 export default function App() {
   // Check if this window is the dedicated OBS overlay route
-  const isOverlayRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/overlay');
+  const routePath = typeof window !== 'undefined' ? window.location.pathname : '';
+  const isEditorRoute = routePath === '/overlay/editor' || routePath.startsWith('/overlay/editor/');
+  const isAlertObsRoute = routePath === '/overlay/alerts' || routePath.startsWith('/overlay/alerts/');
+  const isOverlayRoute = routePath.startsWith('/overlay') && !isEditorRoute && !isAlertObsRoute;
   const isObsDockRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/dock/player');
   const isObsRoute = isOverlayRoute || isObsDockRoute;
 
@@ -285,8 +321,6 @@ export default function App() {
     return () => window.clearTimeout(retry);
   }, [avatarLoadFailed]);
 
-  // Parse query params for overlay route
-  const overlayOptions = parseOverlayOptions(new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''));
   const dockOptions = parseDockOptions(new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''));
 
   useEffect(() => {
@@ -294,22 +328,24 @@ export default function App() {
   }, [state?.config.language]);
 
 
+  if (isEditorRoute) {
+    return <Suspense fallback={<LazyFallback/>}><OverlayEditor playback={state?.playback} language={(state?.config.language as 'de' | 'en') || 'de'} /></Suspense>;
+  }
+
+  if (isAlertObsRoute) {
+    return <Suspense fallback={null}><AlertObsPage /></Suspense>;
+  }
+
   // OBS Overlay view (renders exclusively without UI when accessed at /overlay)
   if (isOverlayRoute) {
-    const hasExplicitQuery = typeof window !== 'undefined' && window.location.search.length > 1;
-    const initialOverlayOptions = (!hasExplicitQuery && state?.activeOverlay) ? state.activeOverlay : overlayOptions;
-    return (
-      <div className="w-full h-full bg-transparent overflow-hidden flex items-start justify-start m-0 p-0">
-        <OverlayWidget playback={state?.playback} options={initialOverlayOptions} language={(state?.config.language as 'de' | 'en') || 'en'} disableInternalWs />
-      </div>
-    );
+    return <ObsOverlayPage playback={state?.playback} activeOverlay={state?.activeOverlay} language={(state?.config.language as 'de' | 'en') || 'en'} />;
   }
 
   // Dedicated OBS Custom Browser Dock: compact YTM-style player bar without dashboard chrome.
   if (isObsDockRoute) {
     return (
       <div className="obs-dock-route">
-        <ObsPlayerDock playback={state?.playback} queue={state?.queue || []} language={(state?.config.language as 'de' | 'en') || 'en'} options={dockOptions} connectionLost={connectionLost} />
+        <ObsPlayerDock playback={state?.playback} queue={state?.queue || []} language={(state?.config.language as 'de' | 'en') || 'en'} options={dockOptions} connectionLost={connectionLost} player={state?.config?.playbackProvider === 'spotify' ? 'spotify' : 'youtube_music'} playerConnected={state?.config?.playbackProvider === 'spotify' ? Boolean(state?.config?.spotifyConnected) : Boolean(state?.config?.companionConnected)} />
       </div>
     );
   }
@@ -545,6 +581,10 @@ export default function App() {
     return [...DEFAULT_TAB_ORDER];
   });
 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const menuScrimRef = useRef<HTMLDivElement>(null);
   const [draggedTab, setDraggedTab] = useState<AppTab | null>(null);
   const [dragOverTab, setDragOverTab] = useState<AppTab | null>(null);
   const dragOccurredRef = useRef(false);
@@ -621,6 +661,7 @@ export default function App() {
     commands: { label: t('tabCommands'), icon: SlidersHorizontal },
     chat: { label: t('tabChat'), icon: MessageSquare },
     overlay: { label: t('tabOverlay'), icon: Tv },
+    alertCreator: { label: language === 'en' ? 'Alert Creator' : 'Alert-Creator', icon: Bell },
     obsDock: { label: language === 'en' ? 'OBS Dock' : 'OBS Dock', icon: PanelTopOpen },
     diagnostics: { label: language === 'en' ? 'Diagnostics' : 'Diagnose', icon: Activity },
     settings: { label: 'Setup', icon: Settings },
@@ -651,6 +692,117 @@ export default function App() {
     window.requestAnimationFrame(() => document.getElementById(`tab-${tabs[next].id}`)?.focus());
   };
 
+  const closeMenu = () => {
+    setMenuOpen(false);
+    window.requestAnimationFrame(() => menuButtonRef.current?.focus());
+  };
+
+  useLayoutEffect(() => {
+    const drawer = drawerRef.current;
+    const button = menuButtonRef.current;
+    const scrim = menuScrimRef.current;
+    if (!drawer || !button) return undefined;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+    const fade = (edge0: number, edge1: number, value: number) => {
+      const x = clamp01((value - edge0) / (edge1 - edge0 || 1));
+      return x * x * (3 - 2 * x);
+    };
+    const restOpen = () => {
+      drawer.dataset.open = 'true';
+      drawer.dataset.progress = '1';
+      drawer.style.top = '0px';
+      drawer.style.left = '0px';
+      drawer.style.width = 'min(18rem, 85vw)';
+      drawer.style.height = '100%';
+      drawer.style.borderRadius = '0px';
+      drawer.style.visibility = 'visible';
+      drawer.style.pointerEvents = 'auto';
+      drawer.style.setProperty('--drawer-reveal', '1');
+      button.style.opacity = '0';
+      if (scrim) scrim.style.opacity = '';
+    };
+    const restClosed = () => {
+      drawer.dataset.open = 'false';
+      drawer.dataset.progress = '0';
+      drawer.style.visibility = 'hidden';
+      drawer.style.pointerEvents = 'none';
+      drawer.style.setProperty('--drawer-reveal', '0');
+      button.style.opacity = '';
+      if (scrim) scrim.style.opacity = '';
+    };
+    if (reduce) {
+      if (menuOpen) restOpen();
+      else restClosed();
+      return undefined;
+    }
+    if (!menuOpen && drawer.dataset.open !== 'true' && drawer.style.visibility !== 'visible') {
+      restClosed();
+      return undefined;
+    }
+    const origin = button.getBoundingClientRect();
+    const openWidth = Math.min(18 * 16, window.innerWidth * 0.85);
+    const openHeight = window.innerHeight;
+    const apply = (progress: number) => {
+      const widen = clamp01(progress / 0.58);
+      const drop = clamp01((progress - 0.36) / 0.64);
+      const width = origin.width + (openWidth - origin.width) * widen;
+      const squareHeight = origin.height + (openWidth - origin.height) * widen;
+      const height = squareHeight + (openHeight - squareHeight) * drop;
+      const left = origin.left * (1 - widen);
+      const top = origin.top * (1 - widen);
+      const radius = (Math.min(width, height) / 2) * (1 - fade(0.42, 0.9, progress));
+      drawer.style.left = `${left.toFixed(2)}px`;
+      drawer.style.top = `${top.toFixed(2)}px`;
+      drawer.style.width = `${width.toFixed(2)}px`;
+      drawer.style.height = `${height.toFixed(2)}px`;
+      drawer.style.borderRadius = `${radius.toFixed(2)}px`;
+      drawer.style.setProperty('--drawer-reveal', fade(0.46, 0.78, progress).toFixed(3));
+      button.style.opacity = Math.max(0, 1 - progress / 0.2).toFixed(3);
+      if (scrim) scrim.style.opacity = fade(0.08, 0.62, progress).toFixed(3);
+      drawer.dataset.progress = String(progress);
+    };
+    const from = Number(drawer.dataset.progress ?? (menuOpen ? '0' : '1'));
+    const target = menuOpen ? 1 : 0;
+    const distance = target - from;
+    if (Math.abs(distance) < 0.004) {
+      if (menuOpen) restOpen();
+      else restClosed();
+      return undefined;
+    }
+    drawer.dataset.open = 'true';
+    drawer.style.visibility = 'visible';
+    drawer.style.pointerEvents = menuOpen ? 'auto' : 'none';
+    apply(from);
+    const duration = Math.max(220, Math.round((menuOpen ? 740 : 520) * Math.abs(distance)));
+    const start = performance.now();
+    let frame = 0;
+    const tick = (now: number) => {
+      if (drawer.dataset.open === 'false') return;
+      const raw = Math.min(1, (now - start) / duration);
+      const eased = menuOpen ? 1 - (1 - raw) ** 3 : 1 - (1 - raw) ** 2;
+      apply(from + distance * eased);
+      if (raw < 1) {
+        frame = window.requestAnimationFrame(tick);
+        return;
+      }
+      if (menuOpen) restOpen();
+      else restClosed();
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeMenu();
+    };
+    window.addEventListener('keydown', onKey);
+    window.requestAnimationFrame(() => document.getElementById(`tab-${activeTab}`)?.focus());
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuOpen]);
+
   return (
     <div className="bg-neutral-950 text-neutral-100 h-screen w-screen flex flex-col antialiased font-sans overflow-hidden relative">
       
@@ -662,134 +814,165 @@ export default function App() {
       )}
 
       {/* Fixed Header & Nav Section */}
-      <div className="flex-none p-4 pb-0 space-y-6">
-        {/* Top Navigation & Status Bar */}
-        <header className="bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 shadow-xl backdrop-blur-md flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0 max-w-full">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-pink-500 flex items-center justify-center shadow-lg shadow-purple-900/40 shrink-0">
+      <div ref={menuScrimRef} className={`fixed inset-0 z-40 bg-black/55 ${menuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`} onClick={closeMenu} aria-hidden="true" />
+          <aside
+            ref={drawerRef}
+            id="app-nav-drawer"
+            className={`fixed z-50 bg-neutral-900 border border-neutral-800 shadow-2xl flex flex-col ${menuOpen ? 'is-open' : ''}`}
+            aria-hidden={!menuOpen}
+            inert={menuOpen ? undefined : true}
+          >
+            <div className="drawer-hero relative aspect-square w-full shrink-0 overflow-hidden border-b border-neutral-800 bg-neutral-900">
               {streamerAvatar && !avatarLoadFailed ? (
-                <img src={streamerAvatar} alt="" className="w-full h-full object-cover rounded-xl" onError={() => setAvatarLoadFailed(true)} />
+                <img src={streamerAvatar} alt="" className="drawer-hero-media absolute inset-0 w-full h-full object-cover object-center" />
               ) : (
-                <Music2 className="w-6 h-6 text-white" />
+                <div className="drawer-hero-media absolute inset-0 bg-gradient-to-br from-purple-700 to-pink-600" />
               )}
+              <button type="button" onClick={closeMenu} className="drawer-reveal absolute top-3 right-3 inline-flex items-center justify-center w-9 h-9 rounded-lg bg-neutral-950/55 text-white hover:bg-neutral-950/80 cursor-pointer ring-1 ring-white/15 backdrop-blur-sm" aria-label={language === 'de' ? 'Menü schließen' : 'Close menu'}>
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <div className="min-w-0">
-              <h1 className="text-lg font-bold text-white leading-tight">{botTitle}</h1>
+            <div className="drawer-reveal flex items-center gap-1.5 border-b border-neutral-800 px-4 py-2">
+              {playbackProvider === 'youtube_music' && (
+                <button
+                  type="button"
+                  onClick={() => { setActiveTab('settings'); closeMenu(); }}
+                  aria-label={isYtmConnected ? t('ytmConnected') : t('ytmDisconnected')}
+                  title={isYtmConnected ? t('ytmConnected') : t('ytmDisconnected')}
+                  className={`inline-flex items-center justify-center w-7 h-7 rounded-full border cursor-pointer transition-colors ${
+                    isYtmConnected
+                      ? 'bg-red-500/15 text-red-500 border-red-500/30 hover:bg-red-500/25'
+                      : 'bg-neutral-800/80 text-neutral-500 border-neutral-700 hover:text-neutral-200'
+                  }`}
+                >
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" fill="currentColor" />
+                    <path d="M10.1 8.5v7l5.8-3.5-5.8-3.5z" className="fill-neutral-950" />
+                  </svg>
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => setQuoteIndex(prev => (prev + 1) % BOT_QUOTES.length)}
-                className="group flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-neutral-400 hover:text-purple-300 transition-colors text-left cursor-pointer bg-transparent border-0 p-0 m-0 max-w-full"
-                title={language === 'de' ? 'Klicken für ein weiteres Zitat / Spruch' : 'Click for another quote'}
-              >
-                <span className="italic min-w-0 whitespace-normal [overflow-wrap:anywhere]">{quoteText}</span>
-                {activeQuote.origin && (
-                  <span className="text-[10px] text-neutral-500 group-hover:text-purple-400 font-medium whitespace-normal [overflow-wrap:anywhere] transition-colors">
-                    — {activeQuote.origin}
-                  </span>
-                )}
-                <Sparkles className="w-3 h-3 text-purple-400/50 group-hover:text-purple-400 transition-colors shrink-0 opacity-0 group-hover:opacity-100" />
-              </button>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <button
-              type="button"
-              onClick={() => setActiveTab('settings')}
-              className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold shadow-sm transition-all cursor-pointer ${
-                isYtmConnected
-                  ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                  : 'bg-neutral-800 text-neutral-400 border border-neutral-700 hover:text-white'
-              }`}
-              title={isYtmConnected ? t('ytmConnected') : t('ytmDisconnected')}
-            >
-              <span aria-hidden="true" className={`w-2 h-2 rounded-full ${isYtmConnected ? 'bg-red-400' : 'bg-neutral-500'} ${isYtmConnected && playbackProvider === 'youtube_music' ? 'animate-ping' : ''}`} />
-              <span>YouTube Music: {isYtmConnected ? (state?.config.language === 'de' ? 'Verbunden' : 'Connected') : (state?.config.language === 'de' ? 'Getrennt' : 'Disconnected')}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('settings')}
-              className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold shadow-sm transition-all cursor-pointer ${
-                isTwitchConnected
-                  ? 'bg-purple-500/10 text-purple-300 border border-purple-500/20'
-                  : 'bg-neutral-800 text-neutral-400 border border-neutral-700 hover:text-white'
-              }`}
-              title={isTwitchConnected ? (channelName ? `${t('twitchConnectedTitle')}: #${channelName}` : t('connected')) : t('twitchDisconnectedTitle')}
-            >
-              <span className={`w-2 h-2 rounded-full ${isTwitchConnected ? 'bg-purple-400' : 'bg-neutral-500'}`} />
-              <span>Twitch: #{channelName || state?.config.twitchChannel || 'Streamer'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('settings')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
-                  isSpotifyConnected
-                    ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
-                    : 'bg-neutral-800 text-neutral-400 border border-neutral-700 hover:text-white'
+                onClick={() => { setActiveTab('settings'); closeMenu(); }}
+                aria-label={isTwitchConnected ? (channelName ? `${t('twitchConnectedTitle')}: #${channelName}` : t('connected')) : t('twitchDisconnectedTitle')}
+                title={isTwitchConnected ? (channelName ? `${t('twitchConnectedTitle')}: #${channelName}` : t('connected')) : t('twitchDisconnectedTitle')}
+                className={`inline-flex items-center justify-center w-7 h-7 rounded-full border cursor-pointer transition-colors ${
+                  isTwitchConnected
+                    ? 'bg-purple-500/15 text-purple-400 border-purple-500/30 hover:bg-purple-500/25'
+                    : 'bg-neutral-800/80 text-neutral-500 border-neutral-700 hover:text-neutral-200'
                 }`}
-                title={isSpotifyConnected ? (isSpotifyPremium ? 'Spotify Premium' : t('spotifyConnected')) : t('spotifyDisconnected')}
               >
-                <span aria-hidden="true" className={`w-2 h-2 rounded-full ${isSpotifyConnected ? 'bg-emerald-400' : 'bg-neutral-500'} ${isSpotifyConnected && playbackProvider === 'spotify' ? 'animate-ping' : ''}`} />
-                <span>Spotify {isSpotifyPremium ? 'Premium' : isSpotifyConnected ? t('connected') : (language === 'de' ? 'Verbinden' : 'Connect')}</span>
+                <svg viewBox="0 0 24 24" className="w-4 h-4" aria-hidden="true">
+                  <path fill="currentColor" d="M4.5 3h15v10.4L15.6 17H12l-2.2 2.2H7.6V17H4.5V3zm2 2v10h2.6v2.1L11.6 15h3.6l2.3-2.3V5h-11zm6.9 6.4V7.2h1.7v4.2h-1.7zm-3.5 0V7.2h1.7v4.2H9.9z" />
+                </svg>
               </button>
-            </div>
-          </header>
-
-          {/* Interactive Tab Navigation with Drag & Drop reordering */}
-          <nav className="flex gap-2 overflow-x-auto pb-1 text-sm border-b border-neutral-800/80 items-center" role="tablist" onKeyDown={handleTabKeys}>
-            {tabs.map(({ id, label, icon: Icon, count }) => {
-              const isActive = activeTab === id;
-              const isBeingDragged = draggedTab === id;
-              const isDropTarget = dragOverTab === id && draggedTab !== id;
-
-              return (
-                <div
-                  key={id}
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, id)}
-                  onDragOver={(e) => handleDragOver(e, id)}
-                  onDrop={(e) => handleDrop(e, id)}
-                  onDragEnd={handleDragEnd}
-                  className={`group relative flex items-center transition-all select-none rounded-xl ${
-                    isBeingDragged ? 'opacity-40 scale-95' : 'opacity-100'
-                  } ${
-                    isDropTarget ? 'ring-2 ring-purple-400 ring-offset-2 ring-offset-neutral-950 scale-105' : ''
+              {playbackProvider === 'spotify' && (
+                <button
+                  type="button"
+                  onClick={() => { setActiveTab('settings'); closeMenu(); }}
+                  aria-label={isSpotifyConnected ? (isSpotifyPremium ? 'Spotify Premium' : t('spotifyConnected')) : t('spotifyDisconnected')}
+                  title={isSpotifyConnected ? (isSpotifyPremium ? 'Spotify Premium' : t('spotifyConnected')) : t('spotifyDisconnected')}
+                  className={`inline-flex items-center justify-center w-7 h-7 rounded-full border cursor-pointer transition-colors ${
+                    isSpotifyConnected
+                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25'
+                      : 'bg-neutral-800/80 text-neutral-500 border-neutral-700 hover:text-neutral-200'
                   }`}
-                  title={language === 'de' ? `${label} (Verschiebbar: Ziehen zum Sortieren)` : `${label} (Movable: Drag to reorder)`}
                 >
-                  <button
-                    id={`tab-${id}`}
-                    type="button"
-                    onClick={() => {
-                      if (dragOccurredRef.current) return;
-                      setActiveTab(id);
-                    }}
-                    className={`px-3.5 py-2 font-semibold rounded-xl flex items-center gap-1.5 transition-all cursor-grab active:cursor-grabbing whitespace-nowrap text-sm ${
-                      isActive
-                        ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
-                        : 'text-neutral-400 hover:text-white hover:bg-neutral-800/60'
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" fill="currentColor" />
+                    <path d="M7.3 10c2.8-.85 5.9-.65 8.5.7M7.7 12.35c2.25-.6 4.75-.45 6.85.6M8.05 14.5c1.75-.4 3.7-.3 5.3.5" fill="none" className="stroke-neutral-950" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            <nav className="drawer-reveal flex flex-col gap-1 p-3 overflow-y-auto text-sm min-h-0 flex-1" role="tablist" onKeyDown={handleTabKeys}>
+              {tabs.map(({ id, label, icon: Icon, count }) => {
+                const isActive = activeTab === id;
+                const isBeingDragged = draggedTab === id;
+                const isDropTarget = dragOverTab === id && draggedTab !== id;
+                return (
+                  <div
+                    key={id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, id)}
+                    onDragOver={(e) => handleDragOver(e, id)}
+                    onDrop={(e) => handleDrop(e, id)}
+                    onDragEnd={handleDragEnd}
+                    className={`group relative flex items-center transition-all select-none rounded-xl ${
+                      isBeingDragged ? 'opacity-40 scale-95' : 'opacity-100'
+                    } ${
+                      isDropTarget ? 'ring-2 ring-purple-400 ring-offset-2 ring-offset-neutral-900 scale-[1.02]' : ''
                     }`}
+                    title={language === 'de' ? `${label} (Verschiebbar: Ziehen zum Sortieren)` : `${label} (Movable: Drag to reorder)`}
                   >
-                    <GripVertical className="w-3.5 h-3.5 text-neutral-500/50 group-hover:text-neutral-300 transition-colors -ml-1 shrink-0" aria-hidden="true" />
-                    <Icon className="w-4 h-4 shrink-0" />
-                    <span>{label}</span>
-                    {typeof count === 'number' && (
-                      <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${isActive ? 'bg-purple-800 text-purple-200' : 'bg-neutral-800 text-neutral-400'}`}>
-                        {count}
-                      </span>
-                    )}
-                  </button>
-                </div>
-              );
-            })}
-          </nav>
+                    <button
+                      id={`tab-${id}`}
+                      type="button"
+                      onClick={() => {
+                        if (dragOccurredRef.current) return;
+                        setActiveTab(id);
+                        closeMenu();
+                      }}
+                      className={`w-full px-3 py-2.5 font-semibold rounded-xl flex items-center gap-2 transition-colors cursor-grab active:cursor-grabbing text-sm text-left ${
+                        isActive
+                          ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
+                          : 'text-neutral-300 hover:text-white hover:bg-neutral-800'
+                      }`}
+                    >
+                      <GripVertical className="w-3.5 h-3.5 text-neutral-500/70 group-hover:text-neutral-300 transition-colors shrink-0" aria-hidden="true" />
+                      <Icon className="w-4 h-4 shrink-0" />
+                      <span className="flex-1">{label}</span>
+                      {typeof count === 'number' && (
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono tabular-nums ${isActive ? 'bg-purple-800 text-purple-200' : 'bg-neutral-800 text-neutral-400'}`}>
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </nav>
+            <button
+              type="button"
+              onClick={() => setQuoteIndex(prev => (prev + 1) % BOT_QUOTES.length)}
+              className="drawer-reveal group shrink-0 mx-3 mb-3 mt-auto px-3 py-3 rounded-xl border border-neutral-800 bg-neutral-950/60 text-center cursor-pointer"
+              title={language === 'de' ? 'Klicken für ein weiteres Zitat / Spruch' : 'Click for another quote'}
+            >
+              <span className="block italic text-xs text-neutral-400 group-hover:text-purple-300 whitespace-normal [overflow-wrap:anywhere] transition-colors">{quoteText}</span>
+              {activeQuote.origin && (
+                <span className="mt-1 block text-[10px] text-neutral-500 group-hover:text-purple-400 whitespace-normal [overflow-wrap:anywhere] transition-colors">
+                  — {activeQuote.origin}
+                </span>
+              )}
+            </button>
+          </aside>
+
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+              <h1 className="sr-only">{botTitle}</h1>
+              <button
+                ref={menuButtonRef}
+                type="button"
+                aria-expanded={menuOpen}
+                aria-controls="app-nav-drawer"
+                aria-label={language === 'de' ? 'Menü' : 'Menu'}
+                onClick={() => setMenuOpen(true)}
+                className="menu-avatar"
+              >
+                <span className="menu-avatar-photo">
+                  {streamerAvatar && !avatarLoadFailed ? (
+                    <img src={streamerAvatar} alt="" onError={() => setAvatarLoadFailed(true)} />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center bg-gradient-to-tr from-purple-600 to-pink-500">
+                      <Music2 className="h-5 w-5 text-white" aria-hidden="true" />
+                    </span>
+                  )}
+                </span>
+              </button>
 
           {Boolean(activeNoticeText && (connectionLost || activeNoticeText !== dismissedNotice)) && (
             <div
               role="status"
-              className="bg-amber-950/40 border border-amber-500/30 text-amber-200 p-3 rounded-xl text-xs flex items-center justify-between gap-2.5 transition-opacity duration-200 shadow-sm"
+              className="mx-3 mt-2 bg-amber-950/40 border border-amber-500/30 text-amber-200 p-3 rounded-xl text-xs flex items-center justify-between gap-2.5 transition-opacity duration-200 shadow-sm"
               onMouseEnter={() => setIsNoticePaused(true)}
               onMouseLeave={() => setIsNoticePaused(false)}
             >
@@ -810,10 +993,8 @@ export default function App() {
               )}
             </div>
           )}
-        </div>
 
-        {/* Scrollable Main Content Area */}
-        <main id="main-content" className="flex-1 overflow-y-auto p-4 flex flex-col space-y-6" tabIndex={-1}>
+        <main id="main-content" className={`flex-1 min-h-0 flex flex-col ${activeTab === 'overlay' || activeTab === 'alertCreator' || activeTab === 'obsDock' ? 'is-overlay-tab overflow-hidden' : 'overflow-y-auto px-4 pb-4 pt-20 space-y-6'}`} tabIndex={-1}>
             {webplayers}
             
             {(!loading && state) && (
@@ -885,14 +1066,24 @@ export default function App() {
           )}
 
           {activeTab === 'overlay' && (
-            <div id="panel-overlay" role="tabpanel" aria-labelledby="tab-overlay"><Suspense fallback={<LazyFallback/>}><OverlayStudio language={state?.config.language as 'de' | 'en'} playback={state?.playback} /></Suspense></div>
+            <div id="panel-overlay" role="tabpanel" aria-labelledby="tab-overlay" className="studio-panel"><Suspense fallback={<LazyFallback/>}><OverlayEditor embedded language={state?.config.language as 'de' | 'en'} playback={state?.playback} /></Suspense></div>
+          )}
+
+          {activeTab === 'alertCreator' && (
+            <div id="panel-alertCreator" role="tabpanel" aria-labelledby="tab-alertCreator" className="studio-panel">
+              <TabErrorBoundary name="Alert Creator">
+                <Suspense fallback={<LazyFallback/>}>
+                  <AlertCreatorStudio language={state?.config.language === 'de' ? 'de' : 'en'} />
+                </Suspense>
+              </TabErrorBoundary>
+            </div>
           )}
 
           {activeTab === 'obsDock' && (
-            <div id="panel-obsDock" role="tabpanel" aria-labelledby="tab-obsDock">
+            <div id="panel-obsDock" role="tabpanel" aria-labelledby="tab-obsDock" className="studio-panel">
               <TabErrorBoundary name="OBS Dock">
                 <Suspense fallback={<LazyFallback/>}>
-                  <ObsDockStudio language={state?.config.language as 'de' | 'en'} playback={state?.playback} queue={state?.queue || []} />
+                  <ObsDockStudio language={state?.config.language as 'de' | 'en'} playback={state?.playback} queue={state?.queue || []} player={playbackProvider === 'spotify' ? 'spotify' : 'youtube_music'} playerConnected={playbackProvider === 'spotify' ? isSpotifyConnected : isYtmConnected} />
                 </Suspense>
               </TabErrorBoundary>
             </div>
@@ -929,6 +1120,7 @@ export default function App() {
           <div className="text-neutral-500 font-mono">v1.8.5 • Electron Edition</div>
         </footer>
       )}
+          </div>
     </div>
   );
 }

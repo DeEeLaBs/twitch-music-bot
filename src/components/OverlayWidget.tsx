@@ -4,12 +4,16 @@ import type { PlaybackState } from '../types.ts';
 import { playbackIdentity } from '../playbackIdentity.ts';
 import { DEFAULT_OVERLAY_OPTIONS, OverlayElementId, OverlayOptions, OverlayPosition, OverlayTheme, recommendedOverlaySize } from '../overlayOptions.ts';
 import { useTranslations } from '../translations.ts';
+import { advancePop, EMPTY_POP, enqueuePop, popFromDelta, type QueuePopState } from '../overlayQueuePop.ts';
+import type { QueueDelta } from '../types.ts';
+import { QueuePopCard } from './QueuePopCard.tsx';
 
 interface OverlayWidgetProps {
   playback?: PlaybackState; options?: Partial<OverlayOptions>; language?: 'de' | 'en'; editorMode?: boolean;
   inStudio?: boolean;
   onPositionChange?: (element: OverlayElementId, position: OverlayPosition) => void;
   disableInternalWs?: boolean;
+  fitFrame?: boolean;
 }
 const themeClasses: Record<OverlayTheme, string> = { glass:'text-white backdrop-blur-xl', neon:'text-fuchsia-50', minimal:'text-white', light:'text-neutral-950', ocean:'text-cyan-50', sunset:'text-orange-50', twitch:'text-white', mono:'text-black' };
 const themeSurface: Record<OverlayTheme, { rgb:string; border:string; text:string }> = {
@@ -57,7 +61,7 @@ const Draggable: React.FC<{ id:OverlayElementId; position:OverlayPosition; enabl
   );
 };
 
-export const OverlayWidget: React.FC<OverlayWidgetProps> = ({ playback: propPlayback, options, language='de', editorMode=false, inStudio=false, disableInternalWs=false, onPositionChange }) => {
+export const OverlayWidget: React.FC<OverlayWidgetProps> = ({ playback: propPlayback, options, language='de', editorMode=false, inStudio=false, disableInternalWs=false, fitFrame=false, onPositionChange }) => {
   const [liveOptions, setLiveOptions] = useState<OverlayOptions | null>(null);
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
   const isSyncDisabled = urlParams?.get('sync') === '0';
@@ -71,6 +75,32 @@ export const OverlayWidget: React.FC<OverlayWidgetProps> = ({ playback: propPlay
     window.addEventListener('playlist:track_added', handler);
     return () => window.removeEventListener('playlist:track_added', handler);
   }, [disableInternalWs]);
+  // Queue pop: one card at a time, bursts collapse into "+N more". Deltas arrive as window events (see useBotState).
+  const [pop, setPop] = useState<QueuePopState>(EMPTY_POP);
+  const recentPopKeys = useRef<string[]>([]);
+  // In the Studio the popup follows the local edits right away; the server echo would replay the old design first.
+  const popSettings = inStudio && options ? { ...DEFAULT_OVERLAY_OPTIONS, ...options } : settings;
+  const queuePopEnabled = popSettings.queuePop !== false;
+  const queuePopSeconds = popSettings.queuePopSeconds;
+  const queuePopDesign = { animation: popSettings.queuePopAnimation, position: popSettings.queuePopPosition, style: popSettings.queuePopStyle, showArt: popSettings.queuePopShowArt };
+  useEffect(() => {
+    if (!queuePopEnabled) { setPop(EMPTY_POP); return undefined; }
+    const handler = (event: Event) => {
+      const item = popFromDelta((event as CustomEvent<QueueDelta>).detail);
+      // The same add can reach this page twice (dashboard hook and the widget's own socket): show it once.
+      if (!item || recentPopKeys.current.includes(item.key)) return;
+      recentPopKeys.current = [...recentPopKeys.current, item.key].slice(-30);
+      setPop(state => enqueuePop(state, item));
+    };
+    window.addEventListener('queue:delta', handler);
+    return () => window.removeEventListener('queue:delta', handler);
+  }, [queuePopEnabled]);
+  const popKey = pop.current?.key;
+  useEffect(() => {
+    if (!popKey) return undefined;
+    const timer = window.setTimeout(() => setPop(advancePop), queuePopSeconds * 1000);
+    return () => window.clearTimeout(timer);
+  }, [popKey, queuePopSeconds]);
   const t=useTranslations(language); const [localPlayback,setLocalPlayback]=useState<PlaybackState|null>(propPlayback||null);
   useEffect(()=>{
     if(propPlayback) setLocalPlayback(propPlayback);
@@ -114,6 +144,7 @@ export const OverlayWidget: React.FC<OverlayWidgetProps> = ({ playback: propPlay
           try{
             const payload=JSON.parse(event.data);
             if(payload?.type==='playlist:track_added' && payload.data) setPlaylistAlert({...payload.data, timestamp: Date.now()});
+            if(payload?.type==='queue_delta'&&payload.data)window.dispatchEvent(new CustomEvent('queue:delta',{detail:payload.data}));
             if(payload?.type==='overlay_update'&&payload.data)setLiveOptions(payload.data);
             if((payload?.type==='state'||payload?.type==='patch')&&payload.data?.activeOverlay)setLiveOptions(payload.data.activeOverlay);
             if(!propPlayback){
@@ -181,7 +212,7 @@ export const OverlayWidget: React.FC<OverlayWidgetProps> = ({ playback: propPlay
   useEffect(()=>{if(!isPlaying)return;const timer=window.setInterval(()=>setSmoothProgress(v=>duration>0?Math.min(duration,v+1):v),1000);return()=>clearInterval(timer);},[duration,isPlaying,songKey]);
   const clampedProgress=duration>0?Math.min(duration,smoothProgress):smoothProgress;
   const progress=duration>0?Math.min(100,Math.max(0,clampedProgress/duration*100)):0; const formatTime=(seconds:number)=>`${Math.floor(seconds/60)}:${String(Math.floor(seconds%60)).padStart(2,'0')}`;
-  const surface=themeSurface[settings.theme]; const fontFamily=settings.fontStyle==='mono'?'ui-monospace, SFMono-Regular, Menlo, monospace':settings.fontStyle==='rounded'?'ui-rounded, Inter, system-ui, sans-serif':settings.fontStyle==='condensed'?'"Arial Narrow", "Roboto Condensed", Inter, sans-serif':'Inter, ui-sans-serif, system-ui, sans-serif';
+  const surface=themeSurface[settings.theme]; const fontFamily=settings.fontFamily||(settings.fontStyle==='mono'?'ui-monospace, SFMono-Regular, Menlo, monospace':settings.fontStyle==='rounded'?'ui-rounded, Inter, system-ui, sans-serif':settings.fontStyle==='condensed'?'"Arial Narrow", "Roboto Condensed", Inter, sans-serif':'Inter, ui-sans-serif, system-ui, sans-serif');
   const sourceLabel=useMemo(()=>localPlayback?.source==='autoplay_radio'?(language==='de'?'Autoplay-Radio':'Autoplay radio'):localPlayback?.source==='queue'?(language==='de'?'Warteschlange':'Queue'):(language==='de'?'Bereit':'Idle'),[language,localPlayback?.source]);
   if(!song){if(settings.hideWhenIdle)return null;return <div className={`overlay-empty overlay-anim-${settings.animation}`} style={{transform:`scale(${settings.scale/100})`,transformOrigin:'center'}} role="status"><Disc3 className="h-5 w-5 animate-spin" aria-hidden="true"/><span>{t('overlayWaiting')}</span></div>;}
   const isRadio=song.requester?.username==='YouTube Music Radio'||song.requester?.displayName==='Autoplay Radio'; const isCoverCard=settings.layout==='coverCard'; const artworkEnabled=settings.showArtwork&&settings.layout!=='textOnly'&&!isCoverCard; const isLargeArtwork=['stacked','vertical','spotlight'].includes(settings.layout); const titleMarquee=settings.useMarquee&&song.title.length>34; const artistMarquee=settings.useMarquee&&song.artist.length>34; const free=settings.freePositioning;
@@ -242,14 +273,14 @@ export const OverlayWidget: React.FC<OverlayWidgetProps> = ({ playback: propPlay
     : surface.border;
   return <>
     <style>{`@keyframes playlist-alert {0%{opacity:0;transform:translateY(-12px) scale(.97)} 10%,85%{opacity:1;transform:translateY(0) scale(1)} 100%{opacity:0;transform:translateY(-8px)}}`}</style>
-    {playlistAlert && <div key={playlistAlert.timestamp} role="status" style={{position:'absolute', top:8, left:8, right:8, zIndex:100, padding:'16px 20px', borderRadius:16, background:'linear-gradient(120deg,#581c87,#312e81)', border:'1px solid #c084fc', color:'#fff', boxShadow:'0 8px 24px #0006', animation:'playlist-alert 5s ease both', fontSize:16, fontFamily:'system-ui', textAlign:settings.textAlign}}>
+    {playlistAlert && <div key={playlistAlert.timestamp} role="status" style={{position:'absolute', top:8, left:8, right:8, zIndex:100, padding:'16px 20px', borderRadius:16, background:'linear-gradient(120deg,#581c87,#312e81)', border:'1px solid #c084fc', color:'#fff', boxShadow:'0 8px 24px #0006', animation:'playlist-alert 5s ease both', fontSize:16, fontFamily, textAlign:settings.textAlign}}>
       {t('streamPlaylistAlert').replace('{title}', playlistAlert.title).replace('{artist}', playlistAlert.artist).replace('{user}', playlistAlert.addedBy)}
     </div>}
     {settings.customCss&&<style>{settings.customCss}</style>}
     <article
       key={editorMode ? 'editor' : (isCoverCard ? `coverCard-${songKey}` : undefined)}
       id="obs-now-playing-banner"
-      className={`overlay-widget overlay-${settings.layout} ${themeClasses[settings.theme]} overlay-font-${settings.fontStyle} overlay-align-${settings.textAlign} overlay-art-${settings.artworkShape} overlay-progress-${settings.progressStyle} overlay-anim-${settings.animation} ${free?'overlay-free':''}`}
+      className={`overlay-widget overlay-${settings.layout} ${themeClasses[settings.theme]} overlay-font-${settings.fontStyle} overlay-align-${settings.textAlign} overlay-art-${settings.artworkShape} overlay-progress-${settings.progressStyle} overlay-anim-${settings.animation} ${free?'overlay-free':''} ${fitFrame?'overlay-fit-frame':''}`}
       style={{
         borderRadius: `${settings.radius}px`,
         borderWidth: settings.showBorder ? '1px' : '0px',
@@ -268,8 +299,11 @@ export const OverlayWidget: React.FC<OverlayWidgetProps> = ({ playback: propPlay
         fontFamily,
         textAlign: settings.textAlign,
         ['--overlay-accent' as string]: settings.accent,
+        ['--overlay-surface' as string]: isCoverCard ? '9,9,11' : surface.rgb,
+        ['--overlay-text' as string]: isCoverCard ? '#ffffff' : surface.text,
         ['--overlay-progress' as string]: `${progress}%`,
-        ...(free ? { width: `${size.width}px`, height: `${size.height}px`, minHeight: `${size.height}px` } : {})
+        ...(free ? { width: `${size.width}px`, height: `${size.height}px`, minHeight: `${size.height}px` } : {}),
+        ...(fitFrame ? { width: '100%', height: '100%', maxWidth: 'none', minHeight: 0, transform: 'none', position: 'relative' as const } : {})
       } as React.CSSProperties}
       aria-label={`${t('npTitle')}: ${song.title} – ${song.artist}`}
     >
@@ -280,6 +314,7 @@ export const OverlayWidget: React.FC<OverlayWidgetProps> = ({ playback: propPlay
         {progressBar&&<Draggable id="progress" position={settings.positions.progress} enabled={editorMode} language={language} onChange={onPositionChange} className="overlay-free-progress">{progressBar}</Draggable>}
         {logo&&<Draggable id="logo" position={settings.positions.logo} enabled={editorMode} language={language} onChange={onPositionChange}>{logo}</Draggable>}
       </>:<>{artwork}{text}{logo}{!isCoverCard?progressBar:null}</>}
+      {queuePopEnabled&&pop.current&&<QueuePopCard key={pop.current.key} item={pop.current} language={language} seconds={queuePopSeconds} design={queuePopDesign}/>}
     </article>
   </>;
 };

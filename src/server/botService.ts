@@ -1,8 +1,12 @@
+import './netDefaults.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AppState, BadgeType, BotConfig, BotLog, ClientToServerMessage, QueueDelta, ServerToClientMessage, Track } from '../types.ts';
-import { DEFAULT_OVERLAY_OPTIONS, type OverlayOptions } from '../overlayOptions.ts';
+import { applyChatClear, pushChatLine, type OverlayChatLine } from '../overlayChat.ts';
+import { DEFAULT_OVERLAY_OPTIONS, mergeOverlayOptions, type OverlayOptions } from '../overlayOptions.ts';
+import { fetchEmoteIndex } from './chatEmotes.ts';
+import { loadOrCreateOverlayToken, tokensMatch } from './overlayAccess.ts';
 import { scheduleJsonWrite } from './atomicStore.ts';
 import { ConfigService } from './configService.ts';
 import { ChannelPointsService } from './channelPointsService.ts';
@@ -14,17 +18,23 @@ import { logger } from './logger.ts';
 import { pluginManager } from './pluginManager.ts';
 import { botEvents } from './eventBus.ts';
 import { SpotifyService } from './spotifyService.ts';
-import { TwitchOAuthService } from './twitchOAuthService.ts';
+import { TwitchOAuthService, TwitchRefreshError } from './twitchOAuthService.ts';
+import { builtInTwitchClientId, isBuiltInTwitchClientId } from './twitchApp.ts';
 import { SecureTokenStore } from './secureTokenStore.ts';
 import { resolveForPlaybackProvider } from './playbackResolver.ts';
+import { getGlobalChatBadges } from './globalBadges.ts';
 import { getStreamerAvatar } from './streamerAvatarService.ts';
 import { StreamPlaylistService } from './streamPlaylistService.ts';
+import { getStreamStats, setStreamTimer, startStreamAlerts } from './alertService.ts';
 
 try { process.loadEnvFile?.(); } catch {}
 
 export class BotService {
   public getStreamerAvatar() {
     return getStreamerAvatar(this.config.twitchChannel || '', this.config.twitchClientId || '', this.config.twitchBotOauthToken || '');
+  }
+  public getGlobalBadges() {
+    return getGlobalChatBadges(this.config.twitchClientId || '', this.config.twitchBotOauthToken || '');
   }
   private config: BotConfig;
   private configService: ConfigService;
@@ -43,6 +53,13 @@ export class BotService {
   private lastQueueForWs: Track[] = [];
   private lastQueueSlices = new Map<keyof Pick<AppState, 'playback' | 'queue' | 'history' | 'voteSkip' | 'blacklist'>, string>();
   private activeOverlay: OverlayOptions;
+  private overlayToken = '';
+  private chatClients = new Set<WebSocket>();
+  private widgetClients = new Set<WebSocket>();
+  private chatLog: OverlayChatLine[] = [];
+  private emoteNames: Record<string, string> = {};
+  private roomId = '';
+  private emoteTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.configService = new ConfigService();
@@ -52,9 +69,7 @@ export class BotService {
     try {
       if (fs.existsSync(overlayConfigFile)) {
         const parsed = JSON.parse(fs.readFileSync(overlayConfigFile, 'utf-8'));
-        if (parsed && typeof parsed === 'object') {
-          initialOverlay = { ...DEFAULT_OVERLAY_OPTIONS, ...parsed, positions: { ...DEFAULT_OVERLAY_OPTIONS.positions, ...parsed.positions } };
-        }
+        if (parsed && typeof parsed === 'object') initialOverlay = mergeOverlayOptions(parsed);
       }
     } catch {}
     this.activeOverlay = initialOverlay;
@@ -66,10 +81,14 @@ export class BotService {
     botEvents.on('twitch:auth_failed', async () => {
       logger.log('warn', 'TWITCH', 'Twitch-Login fehlgeschlagen. Versuche automatische Token-Erneuerung...');
       try {
-        await this.twitchOAuth.forceRefresh();
-        logger.log('info', 'TWITCH', 'Twitch-Token erfolgreich erneuert. Reconnect wird ausgeführt.');
+        if (await this.twitchOAuth.forceRefresh()) logger.log('info', 'TWITCH', 'Twitch-Token erfolgreich erneuert. Reconnect wird ausgeführt.');
+        else logger.log('warn', 'TWITCH', 'Keine erneuerbare Twitch-Anmeldung gespeichert. Bitte neu autorisieren.');
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
+        if (err instanceof TwitchRefreshError && err.transient) {
+          logger.log('warn', 'TWITCH', 'Twitch-Token konnte vorübergehend nicht erneuert werden. Die Erneuerung wird automatisch wiederholt.', { error: errorMsg });
+          return;
+        }
         logger.log('error', 'TWITCH', 'Automatische Token-Erneuerung fehlgeschlagen', { error: errorMsg });
         this.twitchOAuth.setAuthError(errorMsg);
         this.broadcastPatch({ config: this.publicConfig() });
@@ -103,6 +122,19 @@ export class BotService {
   }
 
   private initListeners() {
+    botEvents.on('chat:message', line => {
+      this.chatLog = pushChatLine(this.chatLog, line).slice(-50);
+      this.sendChat({ type: 'chat', data: line });
+    });
+    botEvents.on('chat:clear', clear => {
+      this.chatLog = applyChatClear(this.chatLog, clear);
+      this.sendChat({ type: 'chat_clear', data: clear });
+    });
+    botEvents.on('chat:room', ({ roomId }) => {
+      if (!roomId || roomId === this.roomId) return;
+      this.roomId = roomId;
+      void this.refreshEmotes();
+    });
     // Twitch Log listener
     this.twitchBot.onLog((log) => {
       // addLog already pushes the new entry to connected clients.
@@ -140,7 +172,11 @@ export class BotService {
 
     // YTM Token Acquired listener
     this.ytmCompanion.onTokenAcquired((token) => {
-      this.configService.setYtmToken(token);
+      try { this.configService.setYtmToken(token); }
+      catch (error) {
+        logger.log('error', 'YTM', 'Autorisierungs-Token konnte nicht gespeichert werden', { error: error instanceof Error ? error.message : String(error) });
+        return;
+      }
       this.addLog({
         id: `token-log-${Date.now()}`,
         timestamp: Date.now(),
@@ -194,6 +230,8 @@ export class BotService {
 
         ws.on('close', () => {
           this.clients.delete(ws);
+          this.chatClients.delete(ws);
+          this.widgetClients.delete(ws);
         });
 
         ws.on('message', (raw: WebSocket.Data) => {
@@ -201,6 +239,15 @@ export class BotService {
             const parsed = JSON.parse(raw.toString()) as ClientToServerMessage;
             if (parsed.type === 'get_state') {
               ws.send(JSON.stringify({ type: 'state', data: this.getFullState() }));
+            } else if (parsed.type === 'subscribe_chat' && this.overlayTokenMatches(parsed.token)) {
+              this.chatClients.add(ws);
+              ws.send(JSON.stringify({ type: 'chat_replay', data: this.chatLog }));
+              if (Object.keys(this.emoteNames).length) ws.send(JSON.stringify({ type: 'chat_emotes', data: this.emoteNames }));
+            } else if (parsed.type === 'subscribe_widgets' && this.overlayTokenMatches(parsed.token)) {
+              this.widgetClients.add(ws);
+              ws.send(JSON.stringify({ type: 'stats', data: getStreamStats() }));
+            } else if (parsed.type === 'widget_action' && parsed.action === 'timer' && this.overlayTokenMatches(parsed.token)) {
+              setStreamTimer(parsed.seconds);
             }
           } catch {
             // Ignore
@@ -211,7 +258,18 @@ export class BotService {
 
     this.ytmCompanion.setSimulationMode(this.config.simulationMode);
     this.syncActiveProvider();
-    this.twitchBot.start();
+    // A token known to be expired is not offered to chat; the refresh timer connects once renewal succeeds.
+    this.twitchBot.start({ connect: !this.twitchOAuth.isAccessTokenExpired() });
+    startStreamAlerts({
+      getConfig: () => this.config,
+      getQueue: () => this.queueManager.getQueue(),
+      send: message => this.sendWidgets(message)
+    });
+    void this.refreshEmotes();
+    if (!this.emoteTimer) {
+      this.emoteTimer = setInterval(() => void this.refreshEmotes(), 10 * 60 * 1000);
+      this.emoteTimer.unref();
+    }
     void this.refreshChannelPointsValidation(); this.rewardValidationTimer=setInterval(()=>void this.refreshChannelPointsValidation(),5*60*1000);
   }
 
@@ -252,6 +310,8 @@ export class BotService {
       twitchClientSecret: '',
       ytmdaAuthToken: '',
       twitchTokenConfigured: Boolean(this.config.twitchBotOauthToken),
+      twitchBuiltInAppAvailable: Boolean(builtInTwitchClientId()),
+      twitchUsesBuiltInApp: Boolean(this.config.twitchClientId) && isBuiltInTwitchClientId(this.config.twitchClientId),
       twitchClientSecretConfigured: Boolean(this.config.twitchClientSecret),
       twitchAuthError: this.twitchBot.getAuthError() || (this.twitchOAuth.status().state === 'error' ? this.twitchOAuth.status().error : undefined),
       ytmTokenConfigured: Boolean(this.config.ytmdaAuthToken),
@@ -343,19 +403,48 @@ export class BotService {
     };
   }
 
+  public getOverlayToken(): string {
+    if (!this.overlayToken) this.overlayToken = loadOrCreateOverlayToken();
+    return this.overlayToken;
+  }
+
+  public overlayTokenMatches(token: string): boolean {
+    return tokensMatch(this.getOverlayToken(), token);
+  }
+
+  private async refreshEmotes() {
+    const next = await fetchEmoteIndex(this.roomId);
+    if (!Object.keys(next).length) return;
+    this.emoteNames = next;
+    this.sendChat({ type: 'chat_emotes', data: next });
+  }
+
+  private sendWidgets(payload: ServerToClientMessage) {
+    const raw = JSON.stringify(payload);
+    for (const client of this.widgetClients) {
+      if (client.readyState === WebSocket.OPEN) client.send(raw);
+    }
+  }
+
+  private sendChat(payload: ServerToClientMessage) {
+    const raw = JSON.stringify(payload);
+    for (const client of this.chatClients) {
+      if (client.readyState === WebSocket.OPEN) client.send(raw);
+    }
+  }
+
   public getActiveOverlay(): OverlayOptions {
     return this.activeOverlay;
   }
 
   public setActiveOverlay(options: Partial<OverlayOptions>): OverlayOptions {
-    const merged: OverlayOptions = {
+    const merged = mergeOverlayOptions({
       ...this.activeOverlay,
       ...options,
-      positions: {
-        ...this.activeOverlay.positions,
-        ...(options.positions || {})
-      }
-    };
+      positions: { ...this.activeOverlay.positions, ...(options.positions || {}) },
+      chat: { ...this.activeOverlay.chat, ...(options.chat || {}) },
+      scene: options.scene === undefined ? this.activeOverlay.scene : options.scene
+    });
     this.activeOverlay = merged;
     const overlayConfigFile = path.join(process.cwd(), 'data', 'overlay-config.json');
     scheduleJsonWrite(overlayConfigFile, merged);
@@ -430,6 +519,7 @@ export class BotService {
   }
 
   public getSpotifyService() { return this.spotifyService; }
+  public getTwitchClientId(): string { return this.config.twitchClientId || builtInTwitchClientId(); }
   public startTwitchOAuth(clientId: string, clientSecret?: string) { return this.twitchOAuth.start(clientId, clientSecret); }
   public getTwitchOAuthStatus() { return this.twitchOAuth.status(); }
   public pollTwitchOAuth() { return this.twitchOAuth.poll(); }

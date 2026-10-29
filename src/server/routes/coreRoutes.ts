@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import { botService } from '../botService.ts';
+import { getStreamStats, setStreamGoal, setStreamTimer } from '../alertService.ts';
 import { validateConfig } from '../validation.ts';
 import { BotError } from '../errors.ts';
 import { asyncRoute, validationError } from '../http.ts';
@@ -29,14 +30,22 @@ export function createCoreRoutes(sessionToken: string, appVersion: string, overl
   }));
 
   router.post('/overlay/assets', asyncRoute(async (req,res)=>{
-    const kind=req.body?.kind==='logo'?'logo':req.body?.kind==='background'?'background':null;
+    const requested=req.body?.kind;
+    const kind=requested==='logo'?'logo':requested==='background'?'background':requested==='alert-sound'?'alert-sound':requested==='alert-video'?'alert-video':null;
     const dataUrl=typeof req.body?.dataUrl==='string'?req.body.dataUrl:'';
     if(!kind) throw new BotError('VALIDATION','Ungültiger Asset-Typ.',400);
-    const match=/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
-    if(!match) throw new BotError('VALIDATION','Ungültiges Bildformat.',400);
+    const match=kind==='alert-sound'
+      ? /^data:(audio\/(?:mpeg|mp3|wav|x-wav|wave|vnd\.wave|ogg|webm|mp4|x-m4a|m4a));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl)
+      : kind==='alert-video'
+        ? /^data:(video\/(?:mp4|webm));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl)
+        : /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+    if(!match) throw new BotError('VALIDATION', kind==='alert-sound' ? 'Ungültiges Tonformat.' : kind==='alert-video' ? 'Nur MP4 oder WebM.' : 'Ungültiges Bildformat.', 400);
     const buffer=Buffer.from(match[2],'base64');
-    if(!buffer.length||buffer.length>1024*1024) throw new BotError('VALIDATION','Das Bild darf maximal 1 MB groß sein.',400);
-    const extension=match[1]==='image/jpeg'?'jpg':match[1].slice('image/'.length);
+    const maxBytes=kind==='alert-video'?8*1024*1024:12*1024*1024;
+    if(!buffer.length||buffer.length>maxBytes) throw new BotError('VALIDATION', kind==='alert-video' ? 'Das Video darf maximal 8 MB groß sein.' : 'Die Datei darf maximal 12 MB groß sein.', 400);
+    const audioExtension: Record<string, string>={ 'audio/mpeg':'mp3', 'audio/mp3':'mp3', 'audio/wav':'wav', 'audio/x-wav':'wav', 'audio/wave':'wav', 'audio/vnd.wave':'wav', 'audio/ogg':'ogg', 'audio/webm':'webm', 'audio/mp4':'m4a', 'audio/x-m4a':'m4a', 'audio/m4a':'m4a' };
+    const videoExtension: Record<string, string>={ 'video/mp4':'mp4', 'video/webm':'webm' };
+    const extension=kind==='alert-sound' ? audioExtension[match[1]] : kind==='alert-video' ? videoExtension[match[1]] : match[1]==='image/jpeg'?'jpg':match[1].slice('image/'.length);
     const filename=`${kind}-${Date.now()}-${crypto.randomBytes(5).toString('hex')}.${extension}`;
     try {
       await fs.writeFile(path.join(overlayAssetsDir,filename),buffer,{flag:'wx'});
@@ -44,6 +53,38 @@ export function createCoreRoutes(sessionToken: string, appVersion: string, overl
       throw new BotError('INTERNAL','Bild konnte nicht gespeichert werden.',500);
     }
     res.json({success:true,url:`/overlay-assets/${filename}`});
+  }));
+
+  router.get('/overlay/token', (_req, res) => {
+    res.json({ token: botService.getOverlayToken() });
+  });
+
+  router.get('/overlay/access', (req, res) => {
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!botService.overlayTokenMatches(token)) {
+      res.status(404).json({ ok: false });
+      return;
+    }
+    res.json({ ok: true, options: botService.getActiveOverlay() });
+  });
+
+  router.get('/overlay/stats', (_req, res) => {
+    res.json({ stats: getStreamStats() });
+  });
+
+  router.post('/overlay/goals', asyncRoute(async (req, res) => {
+    const kind = req.body?.kind === 'sub' ? 'sub' : req.body?.kind === 'follower' ? 'follower' : null;
+    if (!kind) throw new BotError('VALIDATION', 'Ungültiges Ziel.', 400);
+    res.json({ stats: setStreamGoal(kind, Number(req.body?.target)) });
+  }));
+
+  router.post('/overlay/timer', asyncRoute(async (req, res) => {
+    res.json({ stats: setStreamTimer(Number(req.body?.seconds) || 0) });
+  }));
+
+  router.get('/overlay/badges', asyncRoute(async (_req, res) => {
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.json({ sets: await botService.getGlobalBadges() });
   }));
 
   router.get('/overlay/active', (_req, res) => {

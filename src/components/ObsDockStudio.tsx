@@ -3,16 +3,11 @@ import {
   ArrowRight,
   BookOpen,
   Check,
-  CheckCircle2,
   Clipboard,
   ExternalLink,
   HelpCircle,
-  Info,
   Layers,
-  Monitor,
-  Move,
   Palette,
-  PanelTopOpen,
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
@@ -31,6 +26,8 @@ type Props = {
   playback: PlaybackState;
   queue: Track[];
   language?: 'de' | 'en';
+  player?: 'youtube_music' | 'spotify';
+  playerConnected?: boolean;
 };
 
 const COLOR_PRESETS = [
@@ -119,7 +116,7 @@ class PreviewErrorBoundary extends React.Component<PreviewErrorBoundaryProps, Pr
   }
 }
 
-export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
+export function ObsDockStudio({ playback, queue, language = 'de', player = 'youtube_music', playerConnected = true }: Props) {
   const [copied, setCopied] = useState(false);
   const [options, setOptions] = useState<DockOptions>(() => {
     try {
@@ -133,6 +130,12 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
   }, [options]);
   const [autoSimulation, setAutoSimulation] = useState<'horizontal' | 'vertical'>('horizontal');
   const [previewBackground, setPreviewBackground] = useState<'transparent' | 'dark'>('transparent');
+  const [guideOpen, setGuideOpen] = useState(() => {
+    try { return window.localStorage.getItem('obs-dock-guide-v1') !== '0'; } catch { return true; }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem('obs-dock-guide-v1', guideOpen ? '1' : '0'); } catch { /* Browser storage is optional. */ }
+  }, [guideOpen]);
   const safeQueue = Array.isArray(queue) ? queue : [];
   const [useDemoData, setUseDemoData] = useState(() => !playback?.currentSong && safeQueue.length === 0);
 
@@ -175,7 +178,7 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
   const layoutOptions: Array<{ id: DockLayout; title: string; desc: string }> = [
     {
       id: 'auto',
-      title: language === 'de' ? 'Auto-Responsive (Empfohlen)' : 'Auto-Responsive (Recommended)',
+      title: 'Auto',
       desc: language === 'de'
         ? 'Passt sich dynamisch an Breite & Höhe des Dock-Fensters in OBS an.'
         : 'Dynamically adapts between horizontal and vertical based on dock size in OBS.',
@@ -197,34 +200,9 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
   ];
 
   return (
-    <section className="studio-shell" aria-labelledby="dock-studio-title">
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">
-            <PanelTopOpen aria-hidden="true" /> OBS Custom Browser Dock
-          </span>
-          <h2 id="dock-studio-title">
-            {language === 'de' ? 'Songbot-Dock gestalten' : 'Customize Songbot dock'}
-          </h2>
-          <p>
-            {language === 'de'
-              ? 'Passe Layout, Warteschlange, Player-Elemente und Darstellung an. Die erzeugte URL übernimmt alle Einstellungen direkt in OBS.'
-              : 'Customize layout, queue, player controls and appearance. The generated URL carries the settings directly into OBS.'}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() => setOptions(DEFAULT_DOCK_OPTIONS)}
-          title={language === 'de' ? 'Auf Standardwerte zurücksetzen' : 'Reset to defaults'}
-        >
-          <RotateCcw aria-hidden="true" />
-          {language === 'de' ? 'Zurücksetzen' : 'Reset'}
-        </button>
-      </div>
-
-      <div className="studio-layout">
-        <div className="studio-controls">
+    <section className="dock-studio" aria-label={language === 'de' ? 'Songbot-Dock gestalten' : 'Customize Songbot dock'}>
+      <div className={`dock-studio-body${guideOpen ? '' : ' is-guide-hidden'}`}>
+        <div className="dock-studio-controls">
           {/* Group 1: Layout & Dimension */}
           <fieldset className="control-group">
             <legend>
@@ -238,6 +216,7 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
                   <label
                     key={item.id}
                     className={`layout-option ${isSelected ? 'is-selected' : ''}`}
+                    title={item.desc}
                   >
                     <input
                       className="sr-only"
@@ -351,26 +330,9 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
                     );
                   })}
                 </div>
-              </div>
+            </div>
 
-              <div className="range-grid">
-                <label>
-                  <span>
-                    {language === 'de' ? 'Hintergrund-Deckkraft' : 'Background opacity'}{' '}
-                    <output>{Math.round(options.opacity * 100)}%</output>
-                  </span>
-                  <input
-                    type="range"
-                    min="0.35"
-                    max="1"
-                    step="0.05"
-                    value={options.opacity}
-                    onChange={(event) => patch({ opacity: Number(event.target.value) })}
-                  />
-                </label>
-              </div>
-
-              <div className="space-y-1.5 pt-1">
+            <div className="space-y-1.5 pt-1">
                 <span className="text-xs font-bold text-neutral-300 block">
                   {language === 'de' ? 'Akzentfarbe' : 'Accent color'}
                 </span>
@@ -407,8 +369,7 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
           </fieldset>
         </div>
 
-        {/* Right Column: Live Preview & Ready Output */}
-        <div className="studio-preview-column">
+        <div className="dock-studio-stage-wrap">
           <div className="preview-toolbar">
             <div className="flex items-center gap-2">
               <strong>{language === 'de' ? 'Vorschau' : 'Preview'}</strong>
@@ -471,6 +432,27 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
                   </button>
                 ))}
               </div>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1"
+                onClick={() => setOptions(DEFAULT_DOCK_OPTIONS)}
+                title={language === 'de' ? 'Auf Standardwerte zurücksetzen' : 'Reset to defaults'}
+              >
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                {language === 'de' ? 'Zurücksetzen' : 'Reset'}
+              </button>
+              <button
+                type="button"
+                className={`inline-flex items-center gap-1${guideOpen ? ' is-active' : ''}`}
+                aria-pressed={guideOpen}
+                onClick={() => setGuideOpen(open => !open)}
+                title={guideOpen
+                  ? (language === 'de' ? 'Anleitung ausblenden' : 'Hide the guide')
+                  : (language === 'de' ? 'Anleitung einblenden' : 'Show the guide')}
+              >
+                <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                {language === 'de' ? 'Anleitung' : 'Guide'}
+              </button>
             </div>
           </div>
 
@@ -486,6 +468,8 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
                   language={language}
                   interactive={false}
                   options={previewOptions}
+                  player={player}
+                  playerConnected={playerConnected}
                 />
               </PreviewErrorBoundary>
             </div>
@@ -506,26 +490,11 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
             <span className="switch" aria-hidden="true" />
           </label>
 
-          {/* Setup / Output Card directly under the preview */}
-          <div className="obs-output-card">
-            <div>
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <h3 className="font-bold text-sm text-neutral-100 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-purple-400" aria-hidden="true" />
-                  {language === 'de' ? 'OBS Dock-URL bereit' : 'OBS Dock URL ready'}
-                </h3>
-                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 px-2 py-0.5 rounded-full">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
-                  {language === 'de' ? 'Echtzeit-Synchron' : 'Live Sync'}
-                </span>
-              </div>
-              <p className="text-xs text-neutral-400 mt-1">
-                {language === 'de'
-                  ? 'Kopiere diese URL und binde sie in OBS Studio als benutzerdefiniertes Browser-Dock ein:'
-                  : 'Copy this URL and add it as a custom browser dock in OBS Studio:'}
-              </p>
+          <div className="dock-url-card">
+            <div className="dock-url-head">
+              <strong>{language === 'de' ? 'OBS Dock-URL' : 'OBS Dock URL'}</strong>
+              <span>{language === 'de' ? 'Echtzeit-Synchron' : 'Live sync'}</span>
             </div>
-
             <div className="copy-row">
               <input
                 id="dock-url-input"
@@ -534,208 +503,77 @@ export function ObsDockStudio({ playback, queue, language = 'de' }: Props) {
                 onFocus={(e) => e.currentTarget.select()}
                 aria-label={language === 'de' ? 'Dock-URL' : 'Dock URL'}
               />
-              <button
-                className="primary-button"
-                type="button"
-                onClick={() => void copyUrl()}
-              >
+              <button className="primary-button" type="button" onClick={() => void copyUrl()}>
                 {copied ? <Check aria-hidden="true" /> : <Clipboard aria-hidden="true" />}
-                {copied
-                  ? (language === 'de' ? 'Kopiert' : 'Copied')
-                  : (language === 'de' ? 'URL kopieren' : 'Copy URL')}
+                {copied ? (language === 'de' ? 'Kopiert' : 'Copied') : (language === 'de' ? 'Kopieren' : 'Copy')}
               </button>
-            </div>
-
-            <div className="output-actions">
-              <a
-                className="secondary-button"
-                href={dockUrl}
-                target="_blank"
-                rel="noreferrer"
-              >
+              <a className="secondary-button" href={dockUrl} target="_blank" rel="noreferrer">
                 <ExternalLink aria-hidden="true" />
-                {language === 'de' ? 'Dock im Browser testen' : 'Test dock in browser'}
+                {language === 'de' ? 'Testen' : 'Test'}
               </a>
-              <span className="text-xs text-neutral-400 font-mono">
-                {options.layout === 'auto'
-                  ? 'layout=auto (Responsive)'
-                  : `${options.layout} · ${options.density}`}
-              </span>
-            </div>
-
-            <div className="bg-purple-950/25 border border-purple-800/35 rounded-xl p-3 text-xs text-purple-200/90 leading-relaxed flex items-start gap-2.5">
-              <Info className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" aria-hidden="true" />
-              <div>
-                <strong className="text-purple-300">
-                  {language === 'de' ? 'Tipp:' : 'Tip:'}
-                </strong>{' '}
-                {language === 'de'
-                  ? 'Verwende Auto-Responsive für frei verschiebbare OBS-Docks. Die Lautstärke wird beim Ziehen lokal flüssig angezeigt und nach dem Loslassen an YouTube Music übertragen.'
-                  : 'Use Auto-Responsive for resizable OBS docks. Volume changes update smoothly in real-time and are dispatched to YouTube Music after dragging.'}
-              </div>
-            </div>
-          </div>
-
-          {/* Detailed Step-by-Step OBS Implementation Guide */}
-          <div className="obs-dock-guide">
-            <div className="obs-dock-guide-header">
-              <div className="w-8 h-8 rounded-lg bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
-                <BookOpen className="w-4 h-4" aria-hidden="true" />
-              </div>
-              <div>
-                <h3 className="font-bold text-sm text-neutral-100">
-                  {language === 'de'
-                    ? 'Schritt-für-Schritt-Anleitung: Dock in OBS einbinden'
-                    : 'Step-by-Step Guide: How to implement dock into OBS'}
-                </h3>
-                <p className="text-xs text-neutral-400 mt-0.5">
-                  {language === 'de'
-                    ? 'Folge diesen 4 Schritten, um den interaktiven Player direkt in deine OBS-Benutzeroberfläche einzubetten:'
-                    : 'Follow these 4 steps to embed the interactive player directly into your OBS interface:'}
-                </p>
-              </div>
-            </div>
-
-            <div className="obs-dock-steps-list">
-              {/* Step 1 */}
-              <div className="obs-dock-step-item">
-                <div className="obs-dock-step-badge">1</div>
-                <div className="obs-dock-step-content">
-                  <div className="obs-dock-step-title">
-                    <span>{language === 'de' ? 'Dock-URL kopieren' : 'Copy Dock URL'}</span>
-                  </div>
-                  <p className="obs-dock-step-desc">
-                    {language === 'de'
-                      ? 'Klicke oben auf „URL kopieren“. Deine gewählten Einstellungen (Layout, Akzentfarbe, sichtbare Elemente) sind bereits fest in der URL hinterlegt.'
-                      : 'Click “Copy URL” above. Your selected settings (layout, accent color, visible elements) are already encoded into the URL.'}
-                  </p>
-                  <div className="mt-2">
-                    <button
-                      type="button"
-                      className="secondary-button text-xs py-1 px-2.5 inline-flex items-center gap-1.5"
-                      onClick={() => void copyUrl()}
-                    >
-                      {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" /> : <Clipboard className="w-3.5 h-3.5 text-purple-400" aria-hidden="true" />}
-                      <span>{copied ? (language === 'de' ? 'URL kopiert!' : 'URL copied!') : (language === 'de' ? 'URL jetzt kopieren' : 'Copy URL now')}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Step 2 */}
-              <div className="obs-dock-step-item">
-                <div className="obs-dock-step-badge">2</div>
-                <div className="obs-dock-step-content">
-                  <div className="obs-dock-step-title">
-                    <Monitor className="w-4 h-4 text-purple-400" aria-hidden="true" />
-                    <span>{language === 'de' ? 'Menü in OBS Studio öffnen' : 'Open Menu in OBS Studio'}</span>
-                  </div>
-                  <p className="obs-dock-step-desc">
-                    {language === 'de'
-                      ? 'Öffne OBS Studio und klicke ganz oben in der Hauptmenüleiste auf:'
-                      : 'Open OBS Studio and click in the top main menu bar on:'}
-                  </p>
-                  <div className="obs-dock-path">
-                    <span>Docks</span>
-                    <ArrowRight className="w-3 h-3 text-purple-400 shrink-0" aria-hidden="true" />
-                    <span>{language === 'de' ? 'Benutzerdefinierte Browser-Docks…' : 'Custom Browser Docks…'}</span>
-                  </div>
-                  <p className="obs-dock-step-desc text-neutral-500">
-                    {language === 'de'
-                      ? '(Es öffnet sich das OBS-Einstellungsfenster mit einer Tabelle für deine Docks)'
-                      : '(The OBS settings dialog will open showing a list of your docks)'}
-                  </p>
-                </div>
-              </div>
-
-              {/* Step 3 */}
-              <div className="obs-dock-step-item">
-                <div className="obs-dock-step-badge">3</div>
-                <div className="obs-dock-step-content">
-                  <div className="obs-dock-step-title">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" aria-hidden="true" />
-                    <span>{language === 'de' ? 'Dock anlegen & URL einfügen' : 'Create Dock & Paste URL'}</span>
-                  </div>
-                  <div className="obs-dock-step-desc space-y-1.5 mt-1">
-                    <div>
-                      <strong className="text-neutral-200">
-                        {language === 'de' ? '1. Dock-Name:' : '1. Dock Name:'}
-                      </strong>{' '}
-                      {language === 'de'
-                        ? 'Trage in der linken Spalte einen Namen ein (z. B.'
-                        : 'Enter a name in the left column (e.g.'}{' '}
-                      <span className="obs-dock-kbd">Music Bot</span>
-                      {language === 'de' ? ').' : ').'}
-                    </div>
-                    <div>
-                      <strong className="text-neutral-200">
-                        {language === 'de' ? '2. URL:' : '2. URL:'}
-                      </strong>{' '}
-                      {language === 'de'
-                        ? 'Klicke in das rechte URL-Feld und füge die kopierte URL ein mit'
-                        : 'Click into the right URL field and paste your copied URL using'}{' '}
-                      <kbd className="obs-dock-kbd">Strg + V</kbd>
-                      <span className="text-neutral-500 text-[11px] ml-1">
-                        {language === 'de' ? '(Mac: Cmd + V)' : '(Mac: Cmd + V)'}
-                      </span>
-                    </div>
-                    <div>
-                      <strong className="text-neutral-200">
-                        {language === 'de' ? '3. Übernehmen:' : '3. Apply:'}
-                      </strong>{' '}
-                      {language === 'de'
-                        ? 'Klicke unten rechts im Dialog auf den Button „Übernehmen“ (bzw. „Apply“).'
-                        : 'Click the “Apply” button in the bottom right corner of the dialog.'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Step 4 */}
-              <div className="obs-dock-step-item">
-                <div className="obs-dock-step-badge">4</div>
-                <div className="obs-dock-step-content">
-                  <div className="obs-dock-step-title">
-                    <Move className="w-4 h-4 text-purple-400" aria-hidden="true" />
-                    <span>{language === 'de' ? 'Dock im OBS-Fenster platzieren' : 'Position Dock in OBS'}</span>
-                  </div>
-                  <p className="obs-dock-step-desc">
-                    {language === 'de'
-                      ? 'Das neue Player-Dock öffnet sich sofort als eigenes Fenster in OBS. Klicke auf die Titelleiste des Fensters und ziehe es mit gedrückter Maustaste an die gewünschte Position in OBS (z. B. neben den Twitch-Chat, über den Audio-Mixer oder als Tab). OBS rastet es automatisch ein.'
-                      : 'The player dock window opens immediately in OBS. Drag it by its title bar to your desired position in OBS (e.g. next to Twitch chat, above audio mixer, or as a tab). OBS will automatically dock it into place.'}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Pro-Tips & Troubleshooting */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-              <div className="bg-purple-950/20 border border-purple-800/30 rounded-xl p-3 text-xs text-purple-200/90 leading-relaxed flex items-start gap-2.5">
-                <Sparkles className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" aria-hidden="true" />
-                <div>
-                  <strong className="text-purple-300 block mb-0.5">
-                    {language === 'de' ? 'Volle Interaktivität' : 'Fully Interactive'}
-                  </strong>
-                  {language === 'de'
-                    ? 'Du kannst Songs pausieren, überspringen, die Lautstärke regeln und durch die Warteschlange scrollen – direkt in OBS, ohne Tabwechsel während des Games.'
-                    : 'Pause or skip songs, adjust volume, and view the queue directly inside OBS without switching windows.'}
-                </div>
-              </div>
-
-              <div className="bg-neutral-900/80 border border-neutral-800 rounded-xl p-3 text-xs text-neutral-300 leading-relaxed flex items-start gap-2.5">
-                <HelpCircle className="w-4 h-4 text-neutral-400 shrink-0 mt-0.5" aria-hidden="true" />
-                <div>
-                  <strong className="text-neutral-200 block mb-0.5">
-                    {language === 'de' ? 'Reiter „Docks“ fehlt?' : 'Missing “Docks” Menu?'}
-                  </strong>
-                  {language === 'de'
-                    ? 'Browser-Docks erfordern OBS Studio v27+. Bei älteren OBS-Versionen findest du Docks unter „Ansicht → Docks“.'
-                    : 'Browser docks require OBS Studio v27+. In older OBS versions, find docks under “View → Docks”.'}
-                </div>
-              </div>
             </div>
           </div>
         </div>
+
+        {guideOpen && (
+        <aside className="dock-studio-guide" aria-label={language === 'de' ? 'Anleitung' : 'Guide'}>
+          <div className="obs-dock-guide-header">
+            <div className="w-7 h-7 rounded-lg bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
+              <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+            </div>
+            <div>
+              <h2>{language === 'de' ? 'Anleitung' : 'Guide'}</h2>
+              <p>{language === 'de' ? 'Player direkt in OBS einbetten.' : 'Embed the player in OBS.'}</p>
+            </div>
+          </div>
+          <ol className="dock-guide-steps">
+            <li>
+              <b>1</b>
+              <div>
+                <strong>{language === 'de' ? 'URL kopieren' : 'Copy the URL'}</strong>
+                <span>{language === 'de' ? 'Layout, Farbe und sichtbare Teile stecken schon im Link.' : 'Layout, color, and visible parts are already in the link.'}</span>
+              </div>
+            </li>
+            <li>
+              <b>2</b>
+              <div>
+                <strong>{language === 'de' ? 'Menü in OBS öffnen' : 'Open the OBS menu'}</strong>
+                <span className="obs-dock-path">
+                  <span>Docks</span>
+                  <ArrowRight aria-hidden="true" />
+                  <span>{language === 'de' ? 'Benutzerdefinierte Browser-Docks…' : 'Custom Browser Docks…'}</span>
+                </span>
+              </div>
+            </li>
+            <li>
+              <b>3</b>
+              <div>
+                <strong>{language === 'de' ? 'Dock anlegen' : 'Create the dock'}</strong>
+                <span>
+                  {language === 'de' ? 'Name' : 'Name'} <kbd className="obs-dock-kbd">Music Bot</kbd>
+                  {language === 'de' ? ', URL mit' : ', paste with'} <kbd className="obs-dock-kbd">Ctrl+V</kbd>
+                  {language === 'de' ? ', dann Übernehmen.' : ', then Apply.'}
+                </span>
+              </div>
+            </li>
+            <li>
+              <b>4</b>
+              <div>
+                <strong>{language === 'de' ? 'Fenster einrasten' : 'Place the window'}</strong>
+                <span>{language === 'de' ? 'An der Titelleiste neben Chat, Mixer oder als Tab ziehen.' : 'Drag it by the title bar next to chat, the mixer, or into a tab.'}</span>
+              </div>
+            </li>
+          </ol>
+          <p className="dock-guide-note">
+            <Sparkles aria-hidden="true" />
+            <span>{language === 'de' ? 'Pause, Skip, Lautstärke und Queue funktionieren direkt in OBS.' : 'Pause, skip, volume, and the queue work inside OBS.'}</span>
+          </p>
+          <p className="dock-guide-note">
+            <HelpCircle aria-hidden="true" />
+            <span>{language === 'de' ? 'Kein Docks-Menü? OBS 27+, sonst Ansicht → Docks.' : 'No Docks menu? OBS 27+, or View → Docks on older versions.'}</span>
+          </p>
+        </aside>
+        )}
       </div>
     </section>
   );

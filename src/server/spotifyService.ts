@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
+import { spotifyPlaybackPollDelayMs } from './playbackPoll.ts';
 import { SecureTokenStore } from './secureTokenStore.ts';
+import { pickTextMatch, prepareTextSearch } from './textSearch.ts';
 
 export interface SpotifyDevice {
   id: string;
@@ -54,7 +56,7 @@ export class SpotifyService {
   private burstGeneration = 0;
   private lastSnapshot: SpotifyPlaybackSnapshot = { connected:false, isPlaying:false, progressSeconds:0, durationSeconds:0, volume:80 };
   private lastError = '';
-  private profile: { id?: string; display_name?: string; product?: string } | null = null;
+  private profile: { id?: string; display_name?: string; product?: string; country?: string } | null = null;
 
   constructor(clientId = '', preferredDeviceId = '') {
     this.clientId = clientId.trim();
@@ -125,7 +127,12 @@ export class SpotifyService {
 
         if (trackChanged || trackRestarted || playbackStopped || stateMatched || step >= delays.length) {
           this.clearBurst();
-          this.scheduleNextPoll(snapshot.isPlaying ? 2000 : 4000);
+          this.scheduleNextPoll(spotifyPlaybackPollDelayMs({
+            connected: true,
+            isPlaying: snapshot.isPlaying,
+            hasTrack: Boolean(snapshot.trackUri || snapshot.title),
+            remainingSeconds: snapshot.durationSeconds - snapshot.progressSeconds
+          }));
           return;
         }
       } else if (step >= delays.length) {
@@ -301,18 +308,26 @@ export class SpotifyService {
     if (!this.isReadyForPlayback()) { await this.refreshProfile(); if (!this.isReadyForPlayback()) throw new Error('Spotify Premium ist nicht aktiv.'); }
     const deviceId = await this.targetDeviceId();
     if (!deviceId) throw new Error('Kein Spotify-Connect-Gerät verfügbar. Öffne Spotify oder den SDK-Player.');
-    if (uri.startsWith('spotify:playlist:')) {
-      const shuffle = await this.api(`/me/player/shuffle?state=true&device_id=${encodeURIComponent(deviceId)}`, { method: 'PUT' });
-      if (!shuffle.ok) throw new Error(`Spotify-Playlist: Shuffle fehlgeschlagen (HTTP ${shuffle.status}).`);
-    }
-    const body = uri.startsWith('spotify:playlist:') ? { context_uri: uri, position_ms: 0 } : { uris: [uri], position_ms: 0 };
+    const playlist = uri.startsWith('spotify:playlist:');
+    const body = playlist ? { context_uri: uri, position_ms: 0 } : { uris: [uri], position_ms: 0 };
     const response = await this.api(`/me/player/play?device_id=${encodeURIComponent(deviceId)}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
     if (!response.ok && response.status !== 204) throw new Error(`Spotify Wiedergabe fehlgeschlagen (HTTP ${response.status}).`);
+    // Starting a playlist context clears shuffle and keeps one order until it is
+    // toggled again. Shuffle after play, off then on, so each fallback start is a new order.
+    if (playlist) {
+      await this.setPlaylistShuffle(deviceId, false);
+      await this.setPlaylistShuffle(deviceId, true);
+    }
     this.preferredDeviceId = deviceId;
     if (typeof this.triggerPollBurst === 'function') {
       this.triggerPollBurst();
     }
     return true;
+  }
+
+  private async setPlaylistShuffle(deviceId: string, enabled: boolean): Promise<void> {
+    const shuffle = await this.api(`/me/player/shuffle?state=${enabled ? 'true' : 'false'}&device_id=${encodeURIComponent(deviceId)}`, { method: 'PUT' });
+    if (!shuffle.ok) throw new Error(`Spotify-Playlist: Shuffle fehlgeschlagen (HTTP ${shuffle.status}).`);
   }
 
   async play(): Promise<boolean> {
@@ -369,24 +384,68 @@ export class SpotifyService {
           }
         } catch { /* Plain text search. */ }
       }
-      const response = trackId
-        ? await this.api(`/tracks/${encodeURIComponent(trackId)}`)
-        : await this.api(`/search?q=${encodeURIComponent(query)}&type=track&limit=1`);
-      if (!response.ok) throw new Error(`Spotify Suche fehlgeschlagen (HTTP ${response.status}).`);
-      const data = await response.json() as any;
-      const track = trackId ? data : data.tracks?.items?.[0];
-    if (!track) throw new Error('Kein Spotify-Treffer für die Suchanfrage gefunden.');
-    
+      if (trackId) {
+        const response = await this.api(`/tracks/${encodeURIComponent(trackId)}`);
+        if (!response.ok) throw new Error(`Spotify Suche fehlgeschlagen (HTTP ${response.status}).`);
+        const track = await response.json() as any;
+        if (!track?.id) throw new Error('Kein Spotify-Treffer für die Suchanfrage gefunden.');
+        return this.spotifyTrackResult(track);
+      }
+
+      const plan = prepareTextSearch(trimmed);
+      if (!plan.scoringQuery || !plan.spotifyQueries.length) throw new Error('Kein Spotify-Treffer für die Suchanfrage gefunden.');
+      const market = /^[A-Za-z]{2}$/.test(this.profile?.country || '') ? this.profile!.country! : '';
+      let lastError: Error | null = null;
+      for (const variant of plan.spotifyQueries) {
+        try {
+          let items = await this.searchSpotifyCatalog(variant, market);
+          if (!items.length && market) items = await this.searchSpotifyCatalog(variant, '');
+          const picked = pickTextMatch(plan.scoringQuery, items.map(track => ({
+            title: String(track?.name || ''),
+            artist: Array.isArray(track?.artists) ? track.artists.map((artist: any) => artist?.name).filter(Boolean).join(', ') : '',
+            track
+          })), { title: plan.titleHint, artist: plan.artistHint });
+          if (picked?.track?.id) return this.spotifyTrackResult(picked.track);
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          if (/Rate Limit/i.test(lastError.message)) throw lastError;
+        }
+      }
+      if (lastError && !/Kein Spotify-Treffer/i.test(lastError.message)) throw lastError;
+      throw new Error('Kein Spotify-Treffer für die Suchanfrage gefunden.');
+  }
+
+  private spotifyTrackResult(track: any) {
+    const artist = Array.isArray(track.artists) ? track.artists.map((entry: any) => entry?.name).filter(Boolean).join(', ') : '';
     return {
       videoId: `spotify-${track.id}`,
       title: track.name,
-      artist: track.artists.map((a: any) => a.name).join(', '),
-      duration: Math.round(track.duration_ms / 1000),
+      artist,
+      duration: Math.round(Number(track.duration_ms || 0) / 1000),
       thumbnailUrl: track.album?.images?.[0]?.url || '',
       url: track.external_urls?.spotify || `https://open.spotify.com/track/${track.id}`,
       requestSource: 'spotify',
       spotifyUri: track.uri
     };
+  }
+
+  private async searchSpotifyCatalog(query: string, market: string, attempt = 0): Promise<any[]> {
+    const marketParam = market ? `&market=${encodeURIComponent(market)}` : '';
+    try {
+      const response = await this.api(`/search?q=${encodeURIComponent(query)}&type=track&limit=10${marketParam}`);
+      if (!response.ok) throw new Error(`Spotify Suche fehlgeschlagen (HTTP ${response.status}).`);
+      const data = await response.json() as any;
+      const items = Array.isArray(data?.tracks?.items) ? data.tracks.items : [];
+      return items.filter((track: any) => track?.id && track.is_playable !== false && Number(track.duration_ms) > 0);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const wait = /Erneut in (\d+)s/.exec(message);
+      if (wait && attempt < 1 && Number(wait[1]) <= 2) {
+        await new Promise(resolve => setTimeout(resolve, Number(wait[1]) * 1000));
+        return this.searchSpotifyCatalog(query, market, attempt + 1);
+      }
+      throw error;
+    }
   }
 
   async addToPlaylist(playlistIdOrUri: string, trackUri: string): Promise<{ success: boolean; error?: string }> {
@@ -426,7 +485,7 @@ export class SpotifyService {
   private isPolling = false;
   async poll(): Promise<SpotifyPlaybackSnapshot | null> {
     if (!this.isConnected() || !this.clientId) {
-      if (!this.isBurstActive()) this.scheduleNextPoll(5000);
+      if (!this.isBurstActive()) this.scheduleNextPoll(spotifyPlaybackPollDelayMs({ connected: false, isPlaying: false, hasTrack: false }));
       return null;
     }
     if (this.isPolling) return null;
@@ -445,7 +504,7 @@ export class SpotifyService {
           deviceId: this.preferredDeviceId || undefined
         };
         this.emit(emptySnapshot);
-        nextDelay = 5000;
+        nextDelay = spotifyPlaybackPollDelayMs({ connected: true, isPlaying: false, hasTrack: false });
         return emptySnapshot;
       }
       if (!response.ok) throw new Error(`Spotify Playback-Status fehlgeschlagen (HTTP ${response.status}).`);
@@ -471,13 +530,17 @@ export class SpotifyService {
       }
       this.lastError = '';
       this.emit(snapshot);
-      const remaining = snapshot.durationSeconds - snapshot.progressSeconds;
-      nextDelay = isPlaying ? (remaining > 0 && remaining < 4 ? 500 : 2000) : 4000;
+      nextDelay = spotifyPlaybackPollDelayMs({
+        connected: true,
+        isPlaying,
+        hasTrack: Boolean(snapshot.trackUri || snapshot.title),
+        remainingSeconds: snapshot.durationSeconds - snapshot.progressSeconds
+      });
       return snapshot;
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
       this.emit({ ...this.lastSnapshot, connected:false });
-      nextDelay = 8000;
+      nextDelay = spotifyPlaybackPollDelayMs({ connected: false, isPlaying: false, hasTrack: false, failed: true });
       return null;
     } finally {
       this.isPolling = false;

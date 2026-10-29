@@ -14,9 +14,10 @@ function channelPointsError(error: unknown): BotError {
 export function createIntegrationRoutes(){
   const router=Router();
   router.post('/twitch/oauth/start',asyncRoute(async(req,res)=>{
-    const clientId=typeof req.body?.clientId==='string'?req.body.clientId.trim():'';
+    // An empty Client ID means "use the app that ships with the bot" (or the one already saved).
+    const clientId=(typeof req.body?.clientId==='string'?req.body.clientId.trim():'')||botService.getTwitchClientId();
     const clientSecret=typeof req.body?.clientSecret==='string'?req.body.clientSecret.trim():undefined;
-    if (!clientId) throw new BotError('VALIDATION','Bitte zuerst die Client-ID deiner Twitch-Anwendung eingeben.',400);
+    if (!clientId) throw new BotError('VALIDATION','Für diese Version ist keine Twitch-Anwendung hinterlegt. Bitte unter „Erweitert“ die Client-ID deiner eigenen Twitch-Anwendung eingeben.',400);
     if (!/^[a-z0-9]{10,64}$/i.test(clientId)) throw new BotError('VALIDATION','Die Twitch Client-ID ist ungültig.',400);
     try {
       res.json(await botService.startTwitchOAuth(clientId, clientSecret));

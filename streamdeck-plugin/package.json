@@ -1,0 +1,24 @@
+{
+  "name": "twitch-music-bot-streamdeck",
+  "version": "1.0.4",
+  "private": true,
+  "type": "module",
+  "description": "Elgato Stream Deck plugin for the Twitch music bot",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "lint": "tsc --noEmit",
+    "pack": "node build.mjs && streamdeck pack com.twitchmusicbot.sdPlugin --output release --force"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "^3.0.2",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@elgato/cli": "^1.10.2",
+    "@types/node": "^26.6.4",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

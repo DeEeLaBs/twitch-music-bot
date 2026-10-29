@@ -1,11 +1,21 @@
 import type { BotConfig } from '../types.ts';
-import { SecureTokenStore } from './secureTokenStore.ts';
+import { SecureTokenStore, type SecretStoreProblem } from './secureTokenStore.ts';
 
-const SCOPES = ['chat:read', 'chat:edit', 'channel:read:redemptions', 'channel:manage:redemptions'];
+const SCOPES = ['chat:read', 'chat:edit', 'channel:read:redemptions', 'channel:manage:redemptions', 'moderator:read:followers', 'channel:read:subscriptions', 'bits:read'];
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 type AuthState = { state: 'idle' | 'pending' | 'connected' | 'error'; userCode?: string; verificationUri?: string; expiresAt?: number; interval?: number; login?: string; error?: string };
 type DeviceResponse = { device_code?: string; user_code?: string; verification_uri?: string; expires_in?: number; interval?: number; message?: string };
 type TokenResponse = { access_token?: string; refresh_token?: string; expires_in?: number; message?: string };
+
+/** A renewal that failed. Transient failures keep the login usable and are retried later. */
+export class TwitchRefreshError extends Error {
+  readonly transient: boolean;
+  constructor(message: string, transient: boolean) {
+    super(message);
+    this.name = 'TwitchRefreshError';
+    this.transient = transient;
+  }
+}
 
 export class TwitchOAuthService {
   private readonly getConfig: () => BotConfig;
@@ -30,13 +40,33 @@ export class TwitchOAuthService {
         : 'Der Twitch-Bestätigungscode ist abgelaufen. Bitte starte die Anmeldung erneut.');
     }
     if (this.state.state === 'idle') {
-      const token = this.secrets.get('twitchBotOauthToken');
+      const stored = this.secrets.read('twitchBotOauthToken');
+      if (stored.problem) return { state: 'error', error: this.storageProblemMessage(stored.problem) };
       const username = this.getConfig().twitchBotUsername;
-      if (token && username) {
+      if (stored.value && username) {
         return { state: 'connected', login: username };
       }
     }
     return { ...this.state };
+  }
+
+  private storageProblemMessage(problem: SecretStoreProblem): string {
+    const english = this.getConfig().language === 'en';
+    const reason = {
+      'key-missing': english ? 'the encryption key file (.secret-key) is missing' : 'die Schlüsseldatei (.secret-key) fehlt',
+      'key-invalid': english ? 'the encryption key file (.secret-key) is damaged' : 'die Schlüsseldatei (.secret-key) ist beschädigt',
+      'store-unreadable': english ? 'the credentials file (secrets.json) is unreadable and has no usable backup' : 'die Zugangsdaten-Datei (secrets.json) ist unlesbar und hat keine brauchbare Sicherung',
+      'decrypt-failed': english ? 'the stored data does not match the encryption key (.secret-key)' : 'die gespeicherten Daten passen nicht zur Schlüsseldatei (.secret-key)'
+    }[problem];
+    return english
+      ? `The saved Twitch login cannot be used because ${reason}. Your files were not changed. Restore the original files from the data folder, or choose "Connect with Twitch" to sign in again; the old files are then kept next to the new ones.`
+      : `Die gespeicherte Twitch-Anmeldung ist nicht nutzbar, weil ${reason}. Deine Dateien wurden nicht verändert. Stelle die Originaldateien im data-Ordner wieder her oder wähle "Mit Twitch verbinden", um dich neu anzumelden; die alten Dateien bleiben dann neben den neuen erhalten.`;
+  }
+
+  /** True when the stored access token is known to be past its expiry time. */
+  public isAccessTokenExpired(): boolean {
+    const expiresAt = Number(this.secrets.get('twitchTokenExpiresAt'));
+    return Boolean(expiresAt) && Date.now() >= expiresAt;
   }
 
   public setAuthError(error: string): void {
@@ -45,6 +75,9 @@ export class TwitchOAuthService {
 
   public async start(clientId: string, clientSecret?: string): Promise<AuthState> {
     if (!/^[a-z0-9]{10,64}$/i.test(clientId)) throw new Error('Bitte eine gültige Twitch Client-ID eingeben.');
+    // Signing in again is the explicit decision to start over, so unusable
+    // credential files are moved aside (not deleted) to make room for new ones.
+    this.secrets.archiveUnrecoverable();
     if (clientSecret) this.secrets.set('twitchClientSecret', clientSecret);
     let response: Response | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -117,7 +150,8 @@ export class TwitchOAuthService {
     if (this.refreshing) return this.refreshing;
     const refreshToken = this.secrets.get('twitchRefreshToken');
     const expiresAt = Number(this.secrets.get('twitchTokenExpiresAt'));
-    if (!refreshToken || !this.getConfig().twitchClientId || (expiresAt && Date.now() < expiresAt - 10 * 60_000)) return;
+    const hasAccessToken = Boolean(this.getConfig().twitchBotOauthToken);
+    if (!refreshToken || !this.getConfig().twitchClientId || (hasAccessToken && expiresAt && Date.now() < expiresAt - 10 * 60_000)) return;
     this.refreshing = this.refresh(refreshToken).finally(() => { this.refreshing = null; });
     return this.refreshing;
   }
@@ -131,12 +165,14 @@ export class TwitchOAuthService {
     return this.status();
   }
 
-  public async forceRefresh(): Promise<void> {
-    if (this.refreshing) return this.refreshing;
+  /** Resolves to false when there is nothing renewable to refresh. */
+  public async forceRefresh(): Promise<boolean> {
+    if (this.refreshing) { await this.refreshing; return true; }
     const refreshToken = this.secrets.get('twitchRefreshToken');
-    if (!refreshToken || !this.getConfig().twitchClientId) return;
+    if (!refreshToken || !this.getConfig().twitchClientId) return false;
     this.refreshing = this.refresh(refreshToken).finally(() => { this.refreshing = null; });
-    return this.refreshing;
+    await this.refreshing;
+    return true;
   }
 
   private async refresh(refreshToken: string): Promise<void> {
@@ -150,23 +186,33 @@ export class TwitchOAuthService {
     if (clientSecret) {
       body.client_secret = clientSecret;
     }
-    const response = await fetch('https://id.twitch.tv/oauth2/token', {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(body),
-      signal: AbortSignal.timeout(10000)
-    });
-    const payload = await response.json() as TokenResponse;
-    if (!response.ok || !payload.access_token || !payload.refresh_token) {
+    let response: Response;
+    try {
+      response = await fetch('https://id.twitch.tv/oauth2/token', {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(body),
+        signal: AbortSignal.timeout(10000)
+      });
+    } catch {
+      throw new TwitchRefreshError(this.getConfig().language === 'en'
+        ? 'Twitch could not be reached. The saved login is kept and renewal will be retried.'
+        : 'Twitch ist nicht erreichbar. Die gespeicherte Anmeldung bleibt erhalten, die Erneuerung wird erneut versucht.', true);
+    }
+    const payload = await response.json().catch(() => ({})) as TokenResponse;
+    if (!response.ok || !payload.access_token) {
       const msg = payload.message || 'Twitch-Token konnte nicht erneuert werden.';
+      // Outages and rate limits say nothing about the credentials themselves.
+      if (response.status >= 500 || response.status === 429 || response.status === 408) throw new TwitchRefreshError(msg, true);
       const userMsg = (msg.toLowerCase().includes('client secret') || msg.toLowerCase().includes('secret'))
         ? (this.getConfig().language === 'en'
             ? 'Twitch requires a Client Secret to refresh tokens. Enter your Twitch Client Secret in the settings or switch your Twitch Developer App to "Public".'
             : 'Twitch verlangt ein Client-Secret zur Token-Erneuerung. Trage dein Twitch Client-Secret in den Einstellungen ein oder stelle deine Twitch-App auf "Public" (Öffentlich) um.')
         : msg;
       this.fail(userMsg);
-      throw new Error(userMsg);
+      throw new TwitchRefreshError(userMsg, false);
     }
-    this.secrets.set('twitchRefreshToken', payload.refresh_token);
+    // Twitch may rotate the refresh token; when it does not, the stored one stays valid.
+    if (payload.refresh_token && payload.refresh_token !== refreshToken) this.secrets.set('twitchRefreshToken', payload.refresh_token);
     this.secrets.set('twitchTokenExpiresAt', String(Date.now() + Math.max(60, payload.expires_in || 14400) * 1000));
     this.saveCredentials(payload.access_token, clientId, this.getConfig().twitchBotUsername);
     this.state = { state: 'connected', login: this.getConfig().twitchBotUsername };

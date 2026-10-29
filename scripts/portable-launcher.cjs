@@ -40,7 +40,9 @@ async function startPortable(root) {
   app.on('before-quit', shutdown);
   process.on('exit', shutdown);
   try {
-    if (!await portAvailable(3000) || !await portAvailable(9863)) throw new Error('Ein Bot oder Player laeuft bereits (Port 3000 / 9863). Bitte zuerst die andere Version beenden.');
+    if (!await portAvailable(3000)) throw new Error('Ein Bot laeuft bereits (Port 3000). Bitte zuerst die andere Version beenden.');
+    // Port 9863 is the embedded companion. A leftover listener must not block startup;
+    // the desktop process reuses it or skips binding when the port is busy.
     const stdout = fs.openSync(path.join(root, 'data', 'server-stdout.log'), 'a');
     const stderr = fs.openSync(path.join(root, 'data', 'server-stderr.log'), 'a');
     serverChild = spawn(options.executable, options.args, { cwd: options.cwd, env: options.env, windowsHide: true, stdio: ['ignore', stdout, stderr] });

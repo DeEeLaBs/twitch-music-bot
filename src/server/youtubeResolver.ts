@@ -3,11 +3,23 @@ import path from 'node:path';
 import { scheduleJsonWrite } from './atomicStore.ts';
 import { CircuitBreaker } from './circuitBreaker.ts';
 import { botEvents } from './eventBus.ts';
+import { judgeTextMatch, prepareTextSearch, type TextMatchHints } from './textSearch.ts';
 /**
  * YouTube Music / YouTube track resolver.
  * Text searches prefer actual song results from music.youtube.com first and
  * only fall back to normal YouTube video search when no usable song result is found.
+ * A text query is retried as a cleaner artist/title phrase. A result is kept only
+ * when it actually shares that phrase, then a specific miss is reported.
  */
+
+export interface YtmSearchCandidate {
+  videoId: string;
+  title: string;
+  artist: string;
+  duration: number;
+  audio: boolean;
+  thumbnailUrl: string;
+}
 
 export interface ResolvedTrackInfo {
   channel?: string;
@@ -183,8 +195,29 @@ export class YouTubeResolver {
     this.cacheMisses++;
     const task=(async()=>{
       try {
-        const musicResult=await this.searchYouTubeMusic(trimmed);
-        const result=musicResult || await this.searchYouTubeVideo(trimmed);
+        const plan = prepareTextSearch(trimmed);
+        const hints: TextMatchHints = { title: plan.titleHint, artist: plan.artistHint };
+        if (!plan.scoringQuery || !plan.textQueries.length) throw new ResolverError('NO_RESULTS', 'Kein passender Song zu dieser Anfrage gefunden.');
+        let musicResult: ResolvedTrackInfo | null = null;
+        for (const variant of plan.textQueries) {
+          musicResult = await this.searchYouTubeMusic(variant, plan.scoringQuery, hints);
+          if (musicResult) break;
+        }
+        let result = musicResult;
+        if (!result) {
+          let network: ResolverError | null = null;
+          for (const variant of plan.textQueries) {
+            try {
+              result = await this.searchYouTubeVideo(variant, plan.scoringQuery, hints);
+              if (result) break;
+            } catch (error) {
+              if (error instanceof ResolverError && error.code === 'NETWORK_ERROR') { network = error; continue; }
+              throw error;
+            }
+          }
+          if (!result && network) throw network;
+          if (!result) throw new ResolverError('NO_RESULTS', 'Kein passender Song zu dieser Anfrage gefunden.');
+        }
         botEvents.emit('search:resolved',{query:trimmed,videoId:result.videoId,source:musicResult?'ytm':'youtube'});
         result.requestSource = 'text';
         this.breaker.success();
@@ -220,7 +253,7 @@ export class YouTubeResolver {
       source = 'youtube';
       result = await this.searchYouTubeVideo(query);
     }
-    if (!this.isLikelySpotifyMatch(metadata, result)) {
+    if (!result || !this.isLikelySpotifyMatch(metadata, result)) {
       throw new ResolverError('NO_RESULTS', 'Kein eindeutiger YouTube-Music-Treffer für den Spotify-Song gefunden.');
     }
     botEvents.emit('search:resolved',{query:`Spotify: ${metadata.artist ? metadata.artist + ' - ' : ''}${metadata.title}`,videoId:result.videoId,source});
@@ -470,54 +503,35 @@ export class YouTubeResolver {
    * Search music.youtube.com and deliberately select a result from a "Songs"/"Titel" shelf.
    * This avoids choosing a music video, live performance or unrelated YouTube video when a
    * canonical song result exists in YouTube Music.
+   * scoringQuery, when set, rejects a top hit that does not share the requested title.
    */
-  private static async searchYouTubeMusic(query: string): Promise<ResolvedTrackInfo | null> {
+  private static async searchYouTubeMusic(query: string, scoringQuery?: string, hints?: TextMatchHints): Promise<ResolvedTrackInfo | null> {
     try {
-      const searchUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
-      const res = await fetch(searchUrl, {
-        signal: AbortSignal.timeout(8000),
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7'
-        }
-      });
-      if (!res.ok) return null;
-
-      const html = await res.text();
-      const data = this.extractInitialData(html);
-      if (!data) return null;
-
-      const songShelves: AnyObject[] = [];
-      this.collectSongShelves(data, songShelves);
-
-      const items: AnyObject[] = [];
-      for (const shelf of songShelves) {
-        const contents = (shelf as any)?.contents;
-        if (!Array.isArray(contents)) continue;
-        for (const entry of contents) {
-          const item = (entry as any)?.musicResponsiveListItemRenderer;
-          if (item) items.push(item);
-          if (items.length >= 8) break;
-        }
-        if (items.length >= 8) break;
+      const html = await this.fetchSearchDocument(`https://music.youtube.com/search?q=${encodeURIComponent(query)}`);
+      let data = this.extractInitialData(html);
+      let candidates = data ? this.collectYtmSongCandidates(data) : [];
+      if (!candidates.length) {
+        const apiData = await this.innertubeMusicSearch(query, html);
+        if (apiData) candidates = this.collectYtmSongCandidates(apiData);
       }
-      // Some YouTube Music layouts omit or rename the Songs shelf heading.
-      // Accept explicitly typed audio tracks from those layouts before ever
-      // falling back to a normal YouTube video search.
-      if (!items.length) this.collectTypedSongItems(data, items);
-      const candidates: Array<{ track: ResolvedTrackInfo; isAudioTrack: boolean }> = [];
-      // Missing durations require a watch-page lookup. Resolve a few candidates in
-      // parallel to keep search latency bounded without creating a request burst.
-      for (let offset = 0; offset < items.length; offset += 4) {
-        const batch = await Promise.all(items.slice(offset, offset + 4).map(item => this.parseMusicSongItem(item)));
-        for (let index = 0; index < batch.length; index++) {
-          const candidate = batch[index];
-          if (candidate) candidates.push({ track: candidate, isAudioTrack: this.isTypedAudioTrack(items[offset + index]) });
-        }
-      }
-      if (candidates.length) {
-        candidates.sort((a, b) => Number(b.isAudioTrack) - Number(a.isAudioTrack) || this.scoreCandidate(query, b.track) - this.scoreCandidate(query, a.track));
-        return candidates[0].track;
+      const phrase = scoringQuery || query;
+      const pool = scoringQuery
+        ? candidates.filter(candidate => judgeTextMatch(phrase, candidate.title, candidate.artist, hints).acceptable)
+        : candidates;
+      pool.sort((a, b) => judgeTextMatch(phrase, b.title, b.artist, hints).score - judgeTextMatch(phrase, a.title, a.artist, hints).score || Number(b.audio) - Number(a.audio));
+      for (const candidate of pool.slice(0, 4)) {
+        let duration = candidate.duration;
+        if (!duration) duration = await this.lookupDuration(candidate.videoId);
+        if (!duration) continue;
+        return {
+          channel: candidate.artist,
+          videoId: candidate.videoId,
+          title: candidate.title,
+          artist: candidate.artist,
+          duration,
+          thumbnailUrl: candidate.thumbnailUrl,
+          url: `https://music.youtube.com/watch?v=${candidate.videoId}`
+        };
       }
     } catch (error) {
       this.noteError(error);
@@ -526,8 +540,10 @@ export class YouTubeResolver {
     return null;
   }
 
-  /** Find only shelves explicitly labelled as Songs / Titel without recursive stack growth. */
-  private static collectSongShelves(root: unknown, output: AnyObject[]) {
+  /** Songs shelf, top-result card, then typed audio/official video rows. Album shelves stay out. */
+  public static collectYtmSongCandidates(root: unknown): YtmSearchCandidate[] {
+    const primary: YtmSearchCandidate[] = [];
+    const typed: YtmSearchCandidate[] = [];
     const queue: unknown[] = [root];
     let head = 0;
     let visited = 0;
@@ -537,85 +553,170 @@ export class YouTubeResolver {
       if (!node || typeof node !== 'object') continue;
       if (Array.isArray(node)) { queue.push(...node); continue; }
       const record = node as AnyObject;
+      const card = this.candidateFromCard(record.musicCardShelfRenderer);
+      if (card) primary.push(card);
       const shelf = record.musicShelfRenderer;
-      if (shelf) {
-        const heading = this.textFromRuns(shelf.title?.runs || shelf.title).toLowerCase().trim();
-        if (/^(songs?|titel|tracks?)$/.test(heading)) output.push(shelf);
+      if (shelf && this.isSongShelfHeading(this.textFromRuns(shelf.title?.runs || shelf.title))) {
+        const contents = Array.isArray(shelf.contents) ? shelf.contents : [];
+        for (const entry of contents) {
+          const parsed = this.candidateFromListItem(entry?.musicResponsiveListItemRenderer);
+          if (parsed) primary.push(parsed);
+        }
       }
-      queue.push(...Object.values(record));
-      if (head > 2000) {
-        queue.splice(0, head);
-        head = 0;
-      }
-    }
-  }
-
-  private static collectTypedSongItems(root: unknown, output: AnyObject[]) {
-    const queue: unknown[] = [root];
-    let head = 0;
-    let visited = 0;
-    while (head < queue.length && visited < 20000 && output.length < 8) {
-      const node = queue[head++];
-      visited++;
-      if (!node || typeof node !== 'object') continue;
-      if (Array.isArray(node)) { queue.push(...node); continue; }
-      const record = node as AnyObject;
-      const item = record.musicResponsiveListItemRenderer;
-      if (this.isTypedAudioTrack(item)) output.push(item);
+      const fallback = this.candidateFromListItem(record.musicResponsiveListItemRenderer);
+      if (fallback && this.isFallbackMusicVideo(record.musicResponsiveListItemRenderer)) typed.push(fallback);
       queue.push(...Object.values(record));
       if (head > 2000) { queue.splice(0, head); head = 0; }
     }
+    const seen = new Set<string>();
+    const merged: YtmSearchCandidate[] = [];
+    const push = (candidate: YtmSearchCandidate) => {
+      if (seen.has(candidate.videoId) || merged.length >= 12) return;
+      seen.add(candidate.videoId);
+      merged.push(candidate);
+    };
+    for (const candidate of primary) push(candidate);
+    if (merged.length < 4) for (const candidate of typed) push(candidate);
+    return merged;
   }
 
-  private static isTypedAudioTrack(item: AnyObject): boolean {
-    return item?.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.watchEndpointMusicSupportedConfigs?.watchEndpointMusicConfig?.musicVideoType === 'MUSIC_VIDEO_TYPE_ATV';
+  private static isSongShelfHeading(heading: string): boolean {
+    const normalized = heading.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim();
+    return /^(songs?|titel|tracks?|canciones|chansons|cancoes|brani|lieder|singles?)$/.test(normalized)
+      || /^top[-\s]?(result|results|ergebnis|ergebnisse)$/.test(normalized);
   }
 
-  /** Turn one YTM song result into queue metadata. */
-  private static async parseMusicSongItem(item: AnyObject): Promise<ResolvedTrackInfo | null> {
-    const videoId =
-      item?.playlistItemData?.videoId ||
-      item?.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
-      item?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.find((r: any) => r?.navigationEndpoint?.watchEndpoint?.videoId)?.navigationEndpoint?.watchEndpoint?.videoId;
+  private static musicVideoType(item: AnyObject | undefined): string {
+    return item?.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.watchEndpointMusicSupportedConfigs?.watchEndpointMusicConfig?.musicVideoType || '';
+  }
 
-    if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return null;
+  private static isFallbackMusicVideo(item: AnyObject | undefined): boolean {
+    const type = this.musicVideoType(item);
+    return type === 'MUSIC_VIDEO_TYPE_ATV' || type === 'MUSIC_VIDEO_TYPE_OMV' || type === 'MUSIC_VIDEO_TYPE_UGC';
+  }
 
-    const titleRuns = item?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
-    const title = this.textFromRuns(titleRuns).trim();
-    if (!title) return null;
+  private static candidateFromCard(card: AnyObject | undefined): YtmSearchCandidate | null {
+    if (!card) return null;
+    const titleRuns = card.title?.runs;
+    const videoId = titleRuns?.find((run: AnyObject) => run?.navigationEndpoint?.watchEndpoint?.videoId)?.navigationEndpoint?.watchEndpoint?.videoId
+      || card.onTap?.watchEndpoint?.videoId
+      || card.playbackEndpoint?.watchEndpoint?.videoId;
+    const title = this.textFromRuns(card.title).trim();
+    if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId) || !title) return null;
+    const subtitle = this.textFromRuns(card.subtitle);
+    const artist = this.extractMusicArtist(card.subtitle?.runs || []) || this.durationAwareArtist(subtitle);
+    const type = titleRuns?.[0]?.navigationEndpoint?.watchEndpoint?.watchEndpointMusicSupportedConfigs?.watchEndpointMusicConfig?.musicVideoType || '';
+    return this.finishCandidate(videoId, title, artist, `${subtitle} ${card.accessibility?.accessibilityData?.label || ''}`, type === 'MUSIC_VIDEO_TYPE_ATV' || /^song\b/i.test(subtitle), card.thumbnail);
+  }
 
-    const bylineRuns = item?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
-    const artist = this.extractMusicArtist(bylineRuns) || 'Various Artists';
+  private static candidateFromListItem(item: AnyObject | undefined): YtmSearchCandidate | null {
+    if (!item) return null;
+    const videoId = item.playlistItemData?.videoId
+      || item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId
+      || item.navigationEndpoint?.watchEndpoint?.videoId
+      || item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.find((run: AnyObject) => run?.navigationEndpoint?.watchEndpoint?.videoId)?.navigationEndpoint?.watchEndpoint?.videoId;
+    const title = this.textFromRuns(item.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text).trim();
+    if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId) || !title) return null;
+    const bylineRuns = item.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+    const byline = this.textFromRuns(bylineRuns);
+    const fixed = this.textFromRuns(item.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text);
+    const artist = this.extractMusicArtist(bylineRuns) || this.durationAwareArtist(byline);
+    return this.finishCandidate(videoId, title, artist, `${fixed} ${byline} ${item.accessibility?.accessibilityData?.label || ''}`, this.musicVideoType(item) === 'MUSIC_VIDEO_TYPE_ATV', item.thumbnail);
+  }
 
-    const durationText = this.textFromRuns(item?.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs || []);
-    let duration = this.parseDurationString(durationText);
+  private static durationAwareArtist(byline: string): string {
+    const text = byline.split('•').map(part => part.trim()).find(part => part && !/^\d{4}$/.test(part) && !/\d+:\d{2}/.test(part) && !/^song$/i.test(part));
+    return text || 'Various Artists';
+  }
 
-    const thumbnails = item?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
-    let thumbnailUrl = Array.isArray(thumbnails) && thumbnails.length
-      ? thumbnails[thumbnails.length - 1]?.url
-      : `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
-
-    // Some YTM search layouts omit duration. Use the regular watch page only to fill the
-    // missing technical metadata, while preserving the song title/artist selected by YTM.
-    if (!duration) {
-      try {
-        const detail = await this.resolveByVideoId(videoId);
-        duration = detail.duration;
-        if (!thumbnailUrl) thumbnailUrl = detail.thumbnailUrl;
-      } catch {
-        return null;
-      }
-    }
-
+  private static finishCandidate(videoId: string, title: string, artist: string, durationText: string, audio: boolean, thumbnail: AnyObject | undefined): YtmSearchCandidate {
+    const thumbnails = thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
     return {
-      channel: artist,
       videoId,
       title: this.cleanTitle(title),
-      artist,
-      duration,
-      thumbnailUrl,
-      url: `https://music.youtube.com/watch?v=${videoId}`
+      artist: artist || 'Various Artists',
+      duration: this.durationFromText(durationText),
+      audio,
+      thumbnailUrl: Array.isArray(thumbnails) && thumbnails.length ? thumbnails[thumbnails.length - 1]?.url : `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
     };
+  }
+
+  private static durationFromText(value: string): number {
+    const clock = /(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(value);
+    if (clock) {
+      if (clock[3]) return Number(clock[1]) * 3600 + Number(clock[2]) * 60 + Number(clock[3]);
+      return Number(clock[1]) * 60 + Number(clock[2]);
+    }
+    const words = /(\d+)\s*(?:minutes?|minuten|mins?)\b(?:\s*(\d+)\s*(?:seconds?|sekunden|secs?|sek\b)?)?/i.exec(value);
+    if (words) return Number(words[1]) * 60 + Number(words[2] || 0);
+    return this.parseDurationString(value);
+  }
+
+  private static async lookupDuration(videoId: string): Promise<number> {
+    try {
+      const html = await this.fetchSearchDocument(`https://www.youtube.com/watch?v=${videoId}`);
+      const millis = html.match(/"approxDurationMs"\s*:\s*"(\d+)"/)?.[1];
+      if (millis) return Math.round(parseInt(millis, 10) / 1000);
+      const seconds = html.match(/"lengthSeconds"\s*:\s*"(\d+)"/)?.[1];
+      if (seconds) return parseInt(seconds, 10);
+    } catch (error) { this.noteError(error); }
+    return 0;
+  }
+
+  private static async innertubeMusicSearch(query: string, html: string): Promise<AnyObject | null> {
+    const key = html.match(/"INNERTUBE_API_KEY":"([a-zA-Z0-9_-]+)"/)?.[1];
+    if (!key) return null;
+    const clientVersion = html.match(/"INNERTUBE_CLIENT_VERSION":"([^"]+)"/)?.[1] || '1.20241016.01.00';
+    try {
+      const res = await fetch(`https://music.youtube.com/youtubei/v1/search?key=${encodeURIComponent(key)}&prettyPrint=false`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(8000),
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Origin': 'https://music.youtube.com',
+          'Referer': 'https://music.youtube.com/',
+          'Cookie': 'SOCS=CAE'
+        },
+        body: JSON.stringify({
+          context: { client: { clientName: 'WEB_REMIX', clientVersion, hl: 'en', gl: 'US' } },
+          query
+        })
+      });
+      if (!res.ok) return null;
+      return await res.json() as AnyObject;
+    } catch (error) {
+      this.noteError(error);
+      return null;
+    }
+  }
+
+  private static async fetchSearchDocument(url: string, init?: RequestInit): Promise<string> {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const headers = new Headers(init?.headers || {});
+        headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        headers.set('Accept-Language', 'en-US,en;q=0.9,de-DE;q=0.8,de;q=0.7');
+        headers.set('Cookie', 'SOCS=CAE');
+        const res = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(8000) });
+        if ((res.status === 429 || res.status >= 500) && attempt === 0) {
+          lastError = new ResolverError('NETWORK_ERROR', `Song-Suche antwortet mit HTTP ${res.status}.`);
+          await new Promise(resolve => setTimeout(resolve, 400));
+          continue;
+        }
+        if (!res.ok) throw new ResolverError('NETWORK_ERROR', `Song-Suche antwortet mit HTTP ${res.status}.`);
+        return await res.text();
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) {
+          await new Promise(resolve => setTimeout(resolve, 250));
+          continue;
+        }
+      }
+    }
+    if (lastError instanceof ResolverError) throw lastError;
+    throw new ResolverError('NETWORK_ERROR', 'Song-Suche ist derzeit nicht erreichbar. Bitte kurz danach erneut versuchen.');
   }
 
   /** Artist is normally the first navigable text run in YTM's song byline. */
@@ -667,47 +768,53 @@ export class YouTubeResolver {
     return null;
   }
 
-  /** Fallback: search normal YouTube only after YTM has no usable song result. */
-  private static async searchYouTubeVideo(query: string): Promise<ResolvedTrackInfo> {
-    let upstreamError: unknown = null;
+  /** Fallback: search normal YouTube only after YTM has no usable song result. scoringQuery keeps text search from accepting an unrelated first video. */
+  private static async searchYouTubeVideo(query: string, scoringQuery?: string, hints?: TextMatchHints): Promise<ResolvedTrackInfo | null> {
+    const phrase = scoringQuery || query;
+    let html = '';
     try {
-      const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-      const res = await fetch(searchUrl, {
-        signal: AbortSignal.timeout(8000),
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7'
-        }
-      });
-
-      if (!res.ok) throw new ResolverError('NETWORK_ERROR', `YouTube-Suche antwortet mit HTTP ${res.status}.`);
-      {
-        const html = await res.text();
-        const data = this.extractInitialData(html);
-        const contents = data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents;
-
-        if (Array.isArray(contents)) {
-          const candidates: ResolvedTrackInfo[]=[];
-          for (const item of contents.slice(0,12)) {
-            const video=(item as AnyObject).videoRenderer as any; if(!video?.videoId) continue;
-            const videoId=video.videoId; let title=video.title?.runs?.[0]?.text||'Track'; let artist=(video.ownerText?.runs?.[0]?.text||'Artist').replace(' - Topic','');
-            const duration=video.lengthText?.simpleText?this.parseDurationString(video.lengthText.simpleText):0; if(!duration) continue;
-            const thumbnailUrl=video.thumbnail?.thumbnails?.length?video.thumbnail.thumbnails[video.thumbnail.thumbnails.length-1].url:`https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
-            if(title.includes(' - ')){const parts=title.split(' - ');if(parts.length>=2){artist=parts[0].trim();title=this.cleanTitle(parts.slice(1).join(' - '));}}
-            candidates.push({channel:video.ownerText?.runs?.[0]?.text||'',videoId,title,artist,duration,thumbnailUrl,url:`https://music.youtube.com/watch?v=${videoId}`});
-          }
-          if(candidates.length){candidates.sort((a,b)=>this.scoreCandidate(query,b)-this.scoreCandidate(query,a));return candidates[0];}
-        }
-
-        // Last-resort video fallback if YouTube changed its structured search response.
-        const videoIdMatches = [...html.matchAll(/\/watch\?v=([a-zA-Z0-9_-]{11})/g)];
-        if (videoIdMatches[0]?.[1]) return this.resolveByVideoId(videoIdMatches[0][1]);
-      }
-    } catch (error) { upstreamError=error; this.noteError(error); }
-
-    if (upstreamError) {
-      if (upstreamError instanceof ResolverError) throw upstreamError;
+      html = await this.fetchSearchDocument(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`);
+    } catch (error) {
+      this.noteError(error);
       throw new ResolverError('NETWORK_ERROR', 'YouTube-Suche fehlgeschlagen: Dienst derzeit nicht erreichbar. Bitte später erneut versuchen.');
+    }
+
+    const data = this.extractInitialData(html);
+    const contents = data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents;
+    const candidates: ResolvedTrackInfo[] = [];
+    if (Array.isArray(contents)) {
+      for (const item of contents.slice(0, 12)) {
+        const video = (item as AnyObject).videoRenderer as AnyObject | undefined;
+        if (!video?.videoId) continue;
+        const videoId = String(video.videoId);
+        let title = video.title?.runs?.[0]?.text || 'Track';
+        let artist = String(video.ownerText?.runs?.[0]?.text || 'Artist').replace(' - Topic', '');
+        const duration = video.lengthText?.simpleText ? this.parseDurationString(video.lengthText.simpleText) : 0;
+        if (!duration) continue;
+        const thumbnailUrl = video.thumbnail?.thumbnails?.length ? video.thumbnail.thumbnails[video.thumbnail.thumbnails.length - 1].url : `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+        if (title.includes(' - ')) {
+          const parts = title.split(' - ');
+          if (parts.length >= 2) { artist = parts[0].trim(); title = this.cleanTitle(parts.slice(1).join(' - ')); }
+        }
+        candidates.push({ channel: video.ownerText?.runs?.[0]?.text || '', videoId, title, artist, duration, thumbnailUrl, url: `https://music.youtube.com/watch?v=${videoId}` });
+      }
+    }
+    const ranked = candidates
+      .map(candidate => ({ candidate, judged: judgeTextMatch(phrase, candidate.title, candidate.artist, hints) }))
+      .sort((a, b) => b.judged.score - a.judged.score);
+    const chosen = scoringQuery ? ranked.find(item => item.judged.acceptable) : ranked[0];
+    if (chosen) return chosen.candidate;
+    if (scoringQuery) return null;
+
+    // Link fallback when YouTube changed its structured search response.
+    // A missing duration is a bad candidate, not a network outage.
+    const videoIdMatches = [...html.matchAll(/\/watch\?v=([a-zA-Z0-9_-]{11})/g)];
+    for (const match of videoIdMatches.slice(0, 4)) {
+      try { return await this.resolveByVideoId(match[1]); }
+      catch (error) {
+        this.noteError(error);
+        if (error instanceof ResolverError) throw error;
+      }
     }
     throw new ResolverError('NO_RESULTS', 'Kein abspielbarer Treffer mit bekannter Dauer gefunden. Bitte einen direkten YouTube-Link versuchen.');
   }
@@ -768,25 +875,6 @@ export class YouTubeResolver {
       .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
       .replace(/\b(official|audio|video|lyrics?|music)\b/g, ' ')
       .replace(/[^a-z0-9]+/g, ' ').trim();
-  }
-
-  private static scoreCandidate(query: string, candidate: ResolvedTrackInfo): number {
-    const q = this.normalizeSearchText(query);
-    const title = this.normalizeSearchText(candidate.title);
-    const artist = this.normalizeSearchText(candidate.artist);
-    const combined = `${artist} ${title}`.trim();
-    const tokens = q.split(' ').filter(Boolean);
-    let score = 0;
-    if (combined === q || `${title} ${artist}` === q) score += 100;
-    if (q.includes(title) && title.length > 2) score += 35;
-    if (q.includes(artist) && artist.length > 2) score += 30;
-    for (const token of tokens) {
-      if (title.split(' ').includes(token)) score += 8;
-      if (artist.split(' ').includes(token)) score += 6;
-    }
-    const noisy = /\b(live|cover|karaoke|remix|sped up|slowed|nightcore|instrumental|reaction)\b/i.test(`${candidate.title} ${candidate.artist}`);
-    if (noisy && !/\b(live|cover|karaoke|remix|sped up|slowed|nightcore|instrumental)\b/i.test(query)) score -= 35;
-    return score;
   }
 
   private static cleanTitle(title: string): string {

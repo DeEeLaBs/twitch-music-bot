@@ -51,6 +51,10 @@ export interface BotConfig {
   channelPointsEnabled?: boolean;
   channelPointsRewardId?: string;
   twitchTokenConfigured?: boolean;
+  /** A shared Twitch app ships with this build, so no developer-console setup is needed. */
+  twitchBuiltInAppAvailable?: boolean;
+  /** The Twitch app currently in use is the bundled one (not the user's own). */
+  twitchUsesBuiltInApp?: boolean;
   twitchClientSecretConfigured?: boolean;
   twitchAuthError?: string;
   ytmTokenConfigured?: boolean;
@@ -72,6 +76,8 @@ export interface BotConfig {
   maxActivePerViewer: number; // default 2
   voteSkipThreshold: number; // default 3
   autoPlayRadio: boolean; // default true
+  /** false = viewers cannot request songs (broadcaster and moderators still can). Absent/true = open. */
+  songRequestsOpen?: boolean;
   spotifyFallbackPlaylist?: string;
   streamPlaylistUrl?: string;
   nowPlayingCooldownSeconds: number; // default 15
@@ -184,6 +190,16 @@ export type ServerToClientMessage =
   | { type: 'log'; data: BotLog }
   | { type: 'queue_delta'; data: QueueDelta }
   | { type: 'playlist:track_added'; data: import('./server/streamPlaylistService.ts').StreamPlaylistEntry }
-  | { type: 'overlay_update'; data: OverlayOptions };
+  | { type: 'overlay_update'; data: OverlayOptions }
+  | { type: 'chat'; data: import('./overlayChat.ts').OverlayChatLine }
+  | { type: 'chat_clear'; data: import('./overlayChat.ts').ChatClearEvent }
+  | { type: 'chat_replay'; data: import('./overlayChat.ts').OverlayChatLine[] }
+  | { type: 'chat_emotes'; data: Record<string, string> }
+  | { type: 'alert'; data: import('./streamAlerts.ts').StreamAlert }
+  | { type: 'stats'; data: import('./streamStats.ts').StreamStats };
 
-export type ClientToServerMessage = { type: 'get_state' };
+export type ClientToServerMessage =
+  | { type: 'get_state' }
+  | { type: 'subscribe_chat'; token: string }
+  | { type: 'subscribe_widgets'; token: string }
+  | { type: 'widget_action'; token: string; action: 'timer'; seconds: number };

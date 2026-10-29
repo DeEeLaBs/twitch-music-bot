@@ -121,7 +121,7 @@ test('Twitch device login survives config saves, restart and automatic token ren
   // An existing provider instance has already read the shared secrets file.
   const otherProvider = new SecureTokenStore();
   otherProvider.get('spotifyRefreshToken');
-  const scopes = ['chat:read', 'chat:edit', 'channel:read:redemptions', 'channel:manage:redemptions'];
+  const scopes = ['chat:read', 'chat:edit', 'channel:read:redemptions', 'channel:manage:redemptions', 'moderator:read:followers', 'channel:read:subscriptions', 'bits:read'];
   let refreshes = 0;
   t.mock.method(globalThis, 'fetch', async (url: any, init: any) => {
     if (String(url).endsWith('/device')) return Response.json({ device_code: 'device', user_code: 'CODE', verification_uri: 'https://www.twitch.tv/activate', expires_in: 1800, interval: 5 });
@@ -156,7 +156,7 @@ test('successful Twitch renewal clears a previous refresh error', async t => {
   (service as any).secrets.set('twitchRefreshToken', 'renewable-token');
   let reject = true;
   t.mock.method(globalThis, 'fetch', async () => reject
-    ? Response.json({ message: 'temporarily unavailable' }, { status: 503 })
+    ? Response.json({ message: 'temporarily unavailable' }, { status: 400 })
     : Response.json({ access_token: 'renewed-access', refresh_token: 'renewed-refresh', expires_in: 3600 }));
   await assert.rejects(service.forceRefresh(), /temporarily unavailable/);
   assert.equal(service.status().state, 'error');

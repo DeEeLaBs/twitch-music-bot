@@ -65,7 +65,10 @@ export function useBotState() {
           else if (payload.type === 'state') { receivedSocketState = true; setState(payload.data); setLoading(false); setInitialError(null); }
           else if (payload.type === 'patch') setState((prev) => prev ? { ...prev, ...payload.data } : prev);
           else if (payload.type === 'overlay_update') setState((prev) => prev ? { ...prev, activeOverlay: payload.data } : prev);
-          else if (payload.type === 'queue_delta') setState((prev) => prev ? applyQueueDelta(prev, payload.data) : prev);
+          else if (payload.type === 'queue_delta') {
+            window.dispatchEvent(new CustomEvent('queue:delta', {detail: payload.data})); // lets overlay widgets show their queue pop
+            setState((prev) => prev ? applyQueueDelta(prev, payload.data) : prev);
+          }
           else if (payload.type === 'log') setState((prev) => {
             if (!prev || prev.logs.some((log) => log.id === payload.data.id)) return prev;
             return { ...prev, logs: [payload.data, ...prev.logs].slice(0, 100) };

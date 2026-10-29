@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import WebSocket from 'ws';
 import { TwitchBot } from '../src/server/twitchBot.ts';
 import { YouTubeResolver } from '../src/server/youtubeResolver.ts';
 import { StreamPlaylistService } from '../src/server/streamPlaylistService.ts';
@@ -100,6 +101,67 @@ test('moderator chat commands act on their explicit targets and reject viewer ac
   await bot.processCommandOrChat(mod, '!blacklist');
   assert.match(messages.at(-1) || '', /Usage: !blacklist/);
   assert.deepEqual(calls, ['vol:0', 'skip', 'veto:1', 'clear', 'pause', 'resume', 'blacklist-add:noisy song', 'blacklist-remove:noisy song']);
+});
+
+test('chat veto accepts only a queue position', async () => {
+  const { bot, calls, messages } = harness();
+  await bot.processCommandOrChat(mod, '!veto never gonna');
+  assert.deepEqual(calls, []);
+  assert.match(messages.at(-1) || '', /Usage: !veto <position>/);
+});
+
+test('a request removed before playback refunds its channel points', async () => {
+  const { bot } = harness();
+  const { ChannelPointsService } = await import('../src/server/channelPointsService.ts');
+  const { botEvents } = await import('../src/server/eventBus.ts');
+  const statuses: string[] = [];
+  const original = ChannelPointsService.updateRedemptionStatus;
+  ChannelPointsService.updateRedemptionStatus = async (_config, _reward, _id, status) => { statuses.push(status); return true; };
+  try {
+    const track = { id: 'dropped', title: 'Dropped', redemptionId: 'redemption', rewardId: 'reward', requestedAt: Date.now() } as Track;
+    (bot as any).scheduleRedemption(track);
+    botEvents.emit('queue:request_removed', { track });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(statuses, ['CANCELED']);
+    assert.equal((bot as any).redemptionTimers.has('dropped'), false);
+  } finally {
+    ChannelPointsService.updateRedemptionStatus = original;
+  }
+});
+
+test('the bot does not copy its own chat lines into the overlay', async () => {
+  const { bot } = harness();
+  const { botEvents } = await import('../src/server/eventBus.ts');
+  const lines: string[] = [];
+  const off = botEvents.on('chat:message', line => lines.push(line.text));
+  try {
+    (bot as any).handleRawIrc(':bot!bot@bot.tmi.twitch.tv PRIVMSG #channel :from the bot\r\n:viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #channel :from a viewer\r\n');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(lines, ['from a viewer']);
+  } finally {
+    off();
+  }
+});
+
+test('broadcaster chat commands run when the bot login is the channel owner', async () => {
+  const { bot, messages } = harness();
+  bot.updateConfig({ twitchBotUsername: 'channel' });
+  (bot as any).ws = { readyState: WebSocket.OPEN, send() {} };
+  TwitchBot.prototype.sendMessage.call(bot, 'from the bot');
+  const { botEvents } = await import('../src/server/eventBus.ts');
+  const lines: string[] = [];
+  const off = botEvents.on('chat:message', line => lines.push(line.text));
+  try {
+    (bot as any).handleRawIrc([
+      '@badges=;mod=0;user-type= :channel!channel@channel.tmi.twitch.tv PRIVMSG #channel :from the bot',
+      '@badge-info=;badges=broadcaster/1;mod=0;display-name=Channel;user-type= :channel!channel@channel.tmi.twitch.tv PRIVMSG #channel :!help'
+    ].join('\r\n') + '\r\n');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(lines, ['!help']);
+    assert.match(messages.at(-1) || '', /Commands/);
+  } finally {
+    off();
+  }
 });
 
 test('failed player commands always report a useful chat error', async () => {
@@ -466,4 +528,45 @@ test('wrongsong reports refund unavailable when redemption lookup failed', async
   Object.assign(queue,{withdrawLatestRequest:()=>({track:{id:'redeemed',title:'Redeemed',rewardId:'reward'}})});
   await bot.processCommandOrChat(viewer,'!wrongsong');
   assert.match(messages[1] || '', /could not be refunded/);
+});
+
+test('closing song requests blocks viewers, still allows moderators, and refunds channel points', async t => {
+  const { ChannelPointsService } = await import('../src/server/channelPointsService.ts');
+  const { bot, calls, messages } = harness('spotify');
+  const link = 'https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT';
+
+  // Default (setting absent) keeps requests open: existing installations are unchanged.
+  await bot.processCommandOrChat(viewer, '!sr ' + link);
+  assert.equal(calls.filter(c => c === 'addSong').length, 1);
+
+  const viewerB = { ...viewer, username: 'viewerb', displayName: 'ViewerB' };
+  Object.assign((bot as any).config, { songRequestsOpen: false, channelPointsEnabled: true });
+  calls.length = 0; messages.length = 0;
+  await bot.processCommandOrChat(viewerB, '!sr ' + link);
+  assert.deepEqual(calls, []);
+  assert.match(messages.at(-1) || '', /closed/i);
+
+  const statuses: string[] = [];
+  t.mock.method(ChannelPointsService, 'updateRedemptionStatus', async (_config: any, _reward: string, _id: string, status: string) => { statuses.push(status); return true; });
+  messages.length = 0;
+  await bot.processCommandOrChat(viewerB, link, true, { rewardId: 'reward', redemptionId: 'redemption' });
+  assert.deepEqual(calls, []);
+  assert.deepEqual(statuses, ['CANCELED']);
+
+  messages.length = 0;
+  await bot.processCommandOrChat(mod, '!sr ' + link);
+  assert.deepEqual(calls, ['addSong']);
+  assert.ok(!messages.some(message => /closed/i.test(message)));
+
+  (bot as any).config.songRequestsOpen = true;
+  (bot as any).config.globalRequestCooldownSeconds = 0;
+  calls.length = 0;
+  await bot.processCommandOrChat({ ...viewer, username: 'viewerc' }, '!sr ' + link);
+  assert.deepEqual(calls, ['addSong']);
+});
+
+test('the requests-open switch is accepted by the config validator and only as a boolean', async () => {
+  const { validateConfig } = await import('../src/server/validation.ts');
+  assert.deepEqual(validateConfig({ songRequestsOpen: false }), { songRequestsOpen: false });
+  assert.throws(() => validateConfig({ songRequestsOpen: 'no' }));
 });

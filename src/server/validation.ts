@@ -24,7 +24,7 @@ export function validateConfig(body: unknown): Partial<BotConfig> {
     }
     if (strings.includes(key)) { if(typeof value!=='string'||value.length>4096||/[\r\n]/.test(value)) throw new Error('Ungültiger Wert für '+key); result[key]=value.trim(); }
     else if (key in limits) { const [min,max]=limits[key]; if(!Number.isInteger(value)||(value as number)<min||(value as number)>max) throw new Error(key+': Wert außerhalb des erlaubten Bereichs.'); result[key]=value; }
-    else if (['autoPlayRadio','simulationMode','channelPointsEnabled','persistSearchCache','spotifyFallbackToYtm'].includes(key)) { if(typeof value!=='boolean') throw new Error('Ungültiger Schalter: '+key); result[key]=value; }
+    else if (['autoPlayRadio','songRequestsOpen','simulationMode','channelPointsEnabled','persistSearchCache','spotifyFallbackToYtm'].includes(key)) { if(typeof value!=='boolean') throw new Error('Ungültiger Schalter: '+key); result[key]=value; }
     else if (key === 'playbackProvider') { if(value !== 'youtube_music' && value !== 'spotify') throw new Error('Ungültiger Provider'); result[key]=value; }
     else if (key==='language') { if(!['de','en'].includes(value as string)) throw new Error('Ungültige Sprache.'); result[key]=value; }
     else if (key==='logLevel') { if(!['debug','info','warn','error'].includes(value as string)) throw new Error('Ungültiges Log-Level.'); result[key]=value; }

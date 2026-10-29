@@ -230,11 +230,7 @@ const NowPlayingCardComponent: React.FC<NowPlayingCardProps> = ({
               >
                 <Radio className="w-8 h-8" />
               </div>
-              {isPlaying ? (
-                <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-sm text-[9px] font-mono text-emerald-400 border border-emerald-500/30">
-                  {t('playbackPlaying')}
-                </div>
-              ) : playback.status === 'loading' ? (
+              {playback.status === 'loading' ? (
                 <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-purple-950/80 backdrop-blur-sm text-[9px] font-mono text-purple-300 border border-purple-500/40 animate-pulse">
                   {language === 'de' ? 'WIRD GESTARTET…' : 'STARTING…'}
                 </div>

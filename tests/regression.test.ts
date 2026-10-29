@@ -11,6 +11,7 @@ import { ConfigService } from '../src/server/configService.ts';
 import { flushScheduledWrites } from '../src/server/atomicStore.ts';
 import { SpotifyService } from '../src/server/spotifyService.ts';
 import type { BotConfig, Track } from '../src/types.ts';
+import { botEvents } from '../src/server/eventBus.ts';
 const config = { maxSongDurationSeconds: 420, maxActivePerViewer: 2, voteSkipThreshold: 1, autoPlayRadio: true, language: 'de' } as BotConfig;
 const viewer = { username: 'viewer', displayName: 'Viewer', badge: 'viewer' as const };
 const track = (id = 'abcdefghijk') => ({ videoId: id, title: 'Song ' + id, artist: 'Artist', duration: 120, thumbnailUrl: '', url: 'https://music.youtube.com/watch?v=' + id });
@@ -32,6 +33,25 @@ let cwd: string, temporary: string;
 beforeEach(() => { cwd = process.cwd(); temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-test-')); process.chdir(temporary); });
 afterEach(() => { process.chdir(cwd); fs.rmSync(temporary, { recursive: true, force: true }); });
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test('moderator removal paths publish every removed request for refunds', () => {
+  const removed: string[] = [];
+  const unsubscribe = botEvents.on('queue:request_removed', ({ track }) => removed.push(track.id));
+  try {
+    for (const action of ['vetoTrack', 'clearQueue', 'removeRequester'] as const) {
+      const q = new QueueManager(config, new Player() as any);
+      const added = q.addSong(track(), viewer);
+      assert.equal(added.success, true);
+      const id = q.getQueue()[0].id;
+      if (action === 'vetoTrack') q.vetoTrack(id);
+      else if (action === 'clearQueue') q.clearQueue();
+      else q.removeRequester(viewer.username);
+      assert.equal(q.getQueue().length, 0);
+      assert.equal(removed.filter(value => value === id).length, 1);
+      removed.length = 0;
+    }
+  } finally { unsubscribe(); flushScheduledWrites(); }
+});
 test('pending request ignores stale track updates and concurrent next calls', async () => {
  const p = new Player(); p.confirm = false; const q = new QueueManager(config, p as any);
  q.addSong(track(), viewer); const first = q.playNext(); assert.equal(q.playNext(), first);

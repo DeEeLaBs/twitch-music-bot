@@ -1,9 +1,11 @@
 import { Router } from 'express';
+import { createAlertFontRoutes } from './routes/alertFontRoutes.ts';
 import { createCoreRoutes } from './routes/coreRoutes.ts';
 import { createPlaybackRoutes } from './routes/playbackRoutes.ts';
 import { createQueueRoutes } from './routes/queueRoutes.ts';
 import { createIntegrationRoutes } from './routes/integrationRoutes.ts';
 import { createSpotifyRoutes } from './routes/spotifyRoutes.ts';
+import { createStreamDeckRoutes } from './routes/streamDeckRoutes.ts';
 import { BotError } from './errors.ts';
 
 export function createApiRouter(options:{sessionToken:string;appVersion:string;overlayAssetsDir:string}) {
@@ -31,9 +33,11 @@ export function createApiRouter(options:{sessionToken:string;appVersion:string;o
   });
 
   api.use(createCoreRoutes(options.sessionToken,options.appVersion,options.overlayAssetsDir));
+  api.use(createAlertFontRoutes(options.overlayAssetsDir));
   api.use(createIntegrationRoutes());
   api.use(createSpotifyRoutes());
   api.use(createPlaybackRoutes());
   api.use(createQueueRoutes());
+  api.use(createStreamDeckRoutes());
   return api;
 }

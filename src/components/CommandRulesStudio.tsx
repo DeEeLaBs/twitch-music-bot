@@ -194,6 +194,7 @@ export const CommandRulesStudio: React.FC<CommandRulesStudioProps> = ({
   const [globalRequestCooldownSeconds, setGlobalRequestCooldownSeconds] = useState(config.globalRequestCooldownSeconds ?? 2);
   const [voteSkipThreshold, setVoteSkipThreshold] = useState(config.voteSkipThreshold || 3);
   const [autoPlayRadio, setAutoPlayRadio] = useState(config.autoPlayRadio !== false);
+  const [songRequestsOpen, setSongRequestsOpen] = useState(config.songRequestsOpen !== false);
   const [spotifyFallbackPlaylist, setSpotifyFallbackPlaylist] = useState(config.spotifyFallbackPlaylist || '');
   const [logLevel, setLogLevel] = useState<'debug' | 'info' | 'warn' | 'error'>(config.logLevel || 'info');
   const [blockedRequesters, setBlockedRequesters] = useState<string[]>(config.blockedRequesters || []);
@@ -290,6 +291,7 @@ export const CommandRulesStudio: React.FC<CommandRulesStudioProps> = ({
         globalRequestCooldownSeconds: Math.max(0, Math.min(60, globalRequestCooldownSeconds)),
         voteSkipThreshold: Math.max(1, Math.min(100, voteSkipThreshold)),
         autoPlayRadio,
+        songRequestsOpen,
         spotifyFallbackPlaylist: spotifyFallbackPlaylist.trim(),
         logLevel,
         blockedRequesters,
@@ -921,6 +923,26 @@ export const CommandRulesStudio: React.FC<CommandRulesStudioProps> = ({
                 {isDe
                   ? 'Spielt automatisch passendes Webradio / Autoplay, wenn die Warteschlange leer ist.'
                   : 'Automatically plays radio suggestions when the viewer request queue is empty.'}
+              </p>
+            </div>
+
+            {/* Rule 10: Open / close song requests */}
+            <div className="bg-neutral-950/70 border border-neutral-800 rounded-xl p-4 space-y-3 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-neutral-200">
+                  {isDe ? 'Songwünsche geöffnet' : 'Song requests open'}
+                </span>
+                <input
+                  type="checkbox"
+                  checked={songRequestsOpen}
+                  onChange={e => setSongRequestsOpen(e.target.checked)}
+                  className="w-4 h-4 accent-purple-500 cursor-pointer"
+                />
+              </div>
+              <p className="text-[11px] text-neutral-500">
+                {isDe
+                  ? 'Wenn aus, können Zuschauer keine Songs wünschen (Streamer und Mods weiterhin). Kanalpunkte werden erstattet.'
+                  : 'When off, viewers cannot request songs (broadcaster and mods still can). Channel points are refunded.'}
               </p>
             </div>
 

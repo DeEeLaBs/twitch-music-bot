@@ -11,6 +11,10 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      // A launch rebuild must not delete the bundle the running server is already serving.
+      emptyOutDir: false,
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
@@ -24,7 +28,9 @@ export default defineConfig(() => {
           '**/*.log',
           '**/*.json',
           '**/.secret-key',
-          '**/dist/**'
+          '**/dist/**',
+          '**/graphify-out/**',
+          '**/.cursor/**'
         ]
       },
     },

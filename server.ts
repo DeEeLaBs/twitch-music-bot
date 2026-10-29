@@ -1,3 +1,4 @@
+import './src/server/netDefaults.ts';
 import { createArtworkProxyRouter } from './src/server/artworkProxy.ts';
 import express from 'express';
 import http from 'http';
@@ -11,6 +12,7 @@ import { pluginManager } from './src/server/pluginManager.ts';
 import { logger } from './src/server/logger.ts';
 import { createApiRouter } from './src/server/apiRouter.ts';
 import { BotError, errorPayload } from './src/server/errors.ts';
+import { isLocalDashboardRequest } from './src/server/localAccess.ts';
 
 const PORT = 3000;
 const APP_VERSION = (() => {
@@ -24,15 +26,31 @@ const sessionToken = crypto.randomBytes(24).toString('hex');
 app.disable('x-powered-by');
 const allowedHosts = new Set(['localhost:3000', '127.0.0.1:3000']);
 function localRequest(req: http.IncomingMessage) {
-  if (!allowedHosts.has(req.headers.host || '')) return false;
-  if (req.headers.origin && !['http://localhost:3000', 'http://127.0.0.1:3000'].includes(req.headers.origin)) return false;
-  return req.headers['sec-fetch-site'] !== 'cross-site';
+  return isLocalDashboardRequest(req);
+}
+const parentPid = Number(process.env.MUSICBOT_PARENT_PID || 0);
+if (parentPid > 0) {
+  // The desktop launcher kills this supervisor with TerminateProcess, which
+  // does not stop a Windows child. Exit when that parent is gone.
+  const watch = setInterval(() => {
+    try { process.kill(parentPid, 0); } catch { clearInterval(watch); process.exit(0); }
+  }, 1000);
+  watch.unref();
 }
 app.use((req, res, next) => { const spotifyCallback=req.path==='/auth/spotify/callback' && allowedHosts.has(req.headers.host || ''); if (!spotifyCallback && !localRequest(req)) { res.status(403).json({ error: 'Nur lokale Zugriffe sind erlaubt.' }); return; } res.setHeader('X-Content-Type-Options', 'nosniff'); next(); });
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '20mb' }));
 const overlayAssetsDir = path.join(process.cwd(), 'data', 'overlay-assets');
 fs.mkdirSync(overlayAssetsDir, { recursive: true });
-app.use('/overlay-assets', express.static(overlayAssetsDir, { fallthrough: false, immutable: false, maxAge: '1h' }));
+const overlayFontTypes: Record<string, string> = { '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff': 'font/woff', '.woff2': 'font/woff2' };
+app.use('/overlay-assets', express.static(overlayAssetsDir, {
+  fallthrough: false,
+  immutable: false,
+  maxAge: '1h',
+  setHeaders(res, filePath) {
+    const type = overlayFontTypes[path.extname(filePath).toLowerCase()];
+    if (type) res.setHeader('Content-Type', type);
+  }
+}));
 
 app.use(createArtworkProxyRouter());
 
@@ -95,7 +113,9 @@ async function start() {
             '**/*.log',
             '**/*.json',
             '**/.secret-key',
-            '**/dist/**'
+            '**/dist/**',
+            '**/graphify-out/**',
+            '**/.cursor/**'
           ]
         }
       },

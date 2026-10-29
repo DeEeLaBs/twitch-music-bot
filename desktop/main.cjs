@@ -22,9 +22,17 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 
 process.on('uncaughtException', err => {
+  if (err && err.code === 'EADDRINUSE') {
+    try { require('fs').appendFileSync(path.join(__dirname, '../data/electron-crash.log'), 'Ignored EADDRINUSE: ' + String(err?.message || err) + '\n'); } catch {}
+    return;
+  }
   try { require('fs').appendFileSync(path.join(__dirname, '../data/electron-crash.log'), String(err?.stack || err) + '\n'); } catch {}
 });
 process.on('unhandledRejection', err => {
+  if (err && err.code === 'EADDRINUSE') {
+    try { require('fs').appendFileSync(path.join(__dirname, '../data/electron-crash.log'), 'Ignored EADDRINUSE rejection: ' + String(err?.message || err) + '\n'); } catch {}
+    return;
+  }
   try { require('fs').appendFileSync(path.join(__dirname, '../data/electron-crash.log'), String(err?.stack || err) + '\n'); } catch {}
 });
 
@@ -97,7 +105,8 @@ function openGoogleAuthWindow(authUrl, switchAccount = false) {
   return googleAuthTask;
 }
 
-if (!app.requestSingleInstanceLock()) {
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
   try { require('fs').appendFileSync(path.join(__dirname, '../data/electron-crash.log'), 'Quitting: requestSingleInstanceLock failed\n'); } catch {}
   app.quit();
 } else {
@@ -425,7 +434,7 @@ if (!app.requestSingleInstanceLock()) {
 
     const checkServer = () => {
       win.loadURL('http://127.0.0.1:3000/').catch(() => {
-        setTimeout(checkServer, 500); 
+        setTimeout(checkServer, 150); 
       });
     };
     
@@ -1309,8 +1318,21 @@ const server = http.createServer(async (req, res) => {
   res.end();
 });
 
-server.on('error', (err) => {
-  console.error('[YTM Mock Server] Error on companion port 9863:', err?.message || err);
-  try { require('fs').appendFileSync(path.join(__dirname, '../data/electron-crash.log'), 'Companion server error: ' + String(err?.stack || err) + '\n'); } catch {}
-});
-server.listen(9863, '127.0.0.1');
+if (isPrimaryInstance) {
+  server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+      console.warn('[YTM Mock Server] Port 9863 is already in use; keeping the existing companion.');
+      try { require('fs').appendFileSync(path.join(__dirname, '../data/electron-crash.log'), 'Companion port busy; reusing existing listener\n'); } catch {}
+      return;
+    }
+    console.error('[YTM Mock Server] Error on companion port 9863:', err?.message || err);
+    try { require('fs').appendFileSync(path.join(__dirname, '../data/electron-crash.log'), 'Companion server error: ' + String(err?.stack || err) + '\n'); } catch {}
+  });
+  const stopCompanionServer = () => {
+    if (!server.listening) return;
+    try { server.close(); } catch {}
+  };
+  app.on('before-quit', stopCompanionServer);
+  app.on('will-quit', stopCompanionServer);
+  server.listen(9863, '127.0.0.1');
+}

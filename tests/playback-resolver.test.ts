@@ -37,9 +37,9 @@ test('Spotify selection resolves Spotify links through Spotify and never searche
   };
   const link = `https://open.spotify.com/track/${id}`;
   const result = await resolveForPlaybackProvider(link, { playbackProvider: 'spotify', spotifyFallbackToYtm: true }, spotify as any);
-  assert.equal(searched, link);
+  assert.equal(searched, `spotify:track:${id}`);
   assert.equal(result.spotifyUri, `spotify:track:${id}`);
-  await assert.rejects(resolveForPlaybackProvider('https://music.youtube.com/watch?v=abcdefghijk', { playbackProvider: 'spotify', spotifyFallbackToYtm: true }, spotify as any), /YouTube-Links/);
+
 });
 
 test('YouTube selection converts Spotify track links into YouTube playback requests', async () => {

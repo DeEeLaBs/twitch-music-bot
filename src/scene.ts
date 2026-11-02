@@ -1,7 +1,7 @@
 import type { OverlayChatOptions } from './overlayChat.ts';
 
 export const SCENE_VERSION = 1 as const;
-export const SCENE_WIDGET_TYPES = ['twitch-chat', 'music-player', 'alert', 'label', 'goal', 'leaderboard', 'countdown', 'text', 'image', 'video', 'fx'] as const;
+export const SCENE_WIDGET_TYPES = ['twitch-chat', 'music-player', 'alert', 'label', 'goal', 'leaderboard', 'countdown', 'greeting', 'text', 'image', 'video', 'fx'] as const;
 export type SceneWidgetType = typeof SCENE_WIDGET_TYPES[number];
 export type ResizeHandle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
@@ -50,6 +50,7 @@ const MIN_FRAME: Record<SceneWidgetType, { width: number; height: number }> = {
   goal: { width: 220, height: 56 },
   leaderboard: { width: 220, height: 140 },
   countdown: { width: 160, height: 72 },
+  greeting: { width: 80, height: 80 },
   text: { width: 120, height: 48 },
   image: { width: 80, height: 80 },
   video: { width: 120, height: 80 },
@@ -64,6 +65,7 @@ const DEFAULT_FONT: Record<SceneWidgetType, number> = {
   goal: 18,
   leaderboard: 16,
   countdown: 28,
+  greeting: 18,
   text: 28,
   image: 14,
   video: 14,
@@ -78,6 +80,7 @@ const WIDGET_IDS: Record<SceneWidgetType, string> = {
   goal: 'w_goal',
   leaderboard: 'w_board',
   countdown: 'w_timer',
+  greeting: 'w_greeting',
   text: 'w_text',
   image: 'w_image',
   video: 'w_video',
@@ -129,9 +132,10 @@ export function designForRender(scene: OverlayScene, query: string | null | unde
   return { width: scene.design.width, height: scene.design.height, queryIgnored: !matches };
 }
 
-export function overlayBrowserUrl(origin: string, token: string, scene: OverlayScene): string {
+export function overlayBrowserUrl(origin: string, token: string, scene: OverlayScene, overlayId?: string): string {
   const params = new URLSearchParams();
   if (token) params.set('token', token);
+  if (overlayId) params.set('id', overlayId);
   params.set('scene', scene.id || 'main');
   params.set('resolution', `${scene.design.width}x${scene.design.height}`);
   return `${origin}/overlay?${params.toString()}`;
@@ -443,6 +447,7 @@ export function defaultFrame(type: SceneWidgetType, design: { width: number; hei
     goal: { width: 480, height: 88, x: 48, y: 136 },
     leaderboard: { width: 360, height: 280, x: 48, y: 240 },
     countdown: { width: 280, height: 120, x: design.width - 328, y: design.height - 168 },
+    greeting: { width: 360, height: 300, x: (design.width - 360) / 2, y: (design.height - 300) / 2 },
     text: { width: 640, height: 140, x: (design.width - 640) / 2, y: (design.height - 140) / 2 },
     image: { width: 320, height: 180, x: design.width - 368, y: 48 },
     video: { width: 480, height: 270, x: design.width - 528, y: 260 },

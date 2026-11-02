@@ -417,7 +417,7 @@ export function CountdownWidget({ stats, playback, variant }: { stats: StreamSta
 }
 
 function ManagedCountdown({ id }: { id: CountdownId }) {
-  const [state, setState] = useState<(CountdownState & { serverNow: number }) | null>(null);
+  const [state, setState] = useState<(Omit<CountdownState, 'seen'> & { serverNow: number }) | null>(null);
   const [now, setNow] = useState(Date.now());
   const [offset, setOffset] = useState(0);
   useEffect(() => {
@@ -886,6 +886,7 @@ export function StreamWidgetMenu({
       {(widget.type === 'image' || widget.type === 'video') && (
         <MediaFields kind={widget.type} variant={widget.variant} language={language} onVariant={onVariant} />
       )}
+      {widget.type === 'greeting' && <p>{ui('Personen, GIFs und Sounds im Menü Begrüßungen konfigurieren und dieses Overlay als Ausgabe wählen. Auch reiner Sound benötigt eine aktive OBS-Browserquelle.', 'Configure people, GIFs and sounds in Greetings and select this overlay as output. Sound-only greetings also require an active OBS browser source.')}</p>}
       {widget.type === 'alert' && <p>{ui('Folgt, Abos, Bits und Raids. Der Song-Hinweis wird zuerst gezeigt.', 'Follows, subs, bits, and raids. The song notice finishes first.')}</p>}
       {widget.type === 'fx' && <FxFields variant={widget.variant} language={language} onVariant={onVariant} />}
     </div>

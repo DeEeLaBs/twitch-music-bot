@@ -44,6 +44,13 @@ export function createQueueRoutes(){
   router.get('/stream-playlist', (_req, res) => {
     res.json({ success: true, items: botService.getStreamPlaylistService().getItems() });
   });
+  router.post('/stream-playlist/:id/retry', asyncRoute(async (req, res) => {
+    const service = botService.getStreamPlaylistService();
+    if (!service.getItems().some(item => item.id === req.params.id)) throw new BotError('NOT_FOUND', 'Song nicht gefunden.', 404);
+    if (req.body?.useConfiguredPlaylist !== undefined && typeof req.body.useConfiguredPlaylist !== 'boolean') throw new BotError('VALIDATION', 'Ungültige Playlist-Auswahl.', 400);
+    const entry = await service.retrySpotify(req.params.id, botService.getSpotifyService(), botService.getFullState().config.streamPlaylistUrl, req.body?.useConfiguredPlaylist === true);
+    res.json({ success: true, entry });
+  }));
   router.delete('/stream-playlist/:id', (req, res) => {
     const success = botService.getStreamPlaylistService().removeTrack(req.params.id);
     res.status(success ? 200 : 404).json({ success });

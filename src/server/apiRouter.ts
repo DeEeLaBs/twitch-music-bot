@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import type { GreetingService } from './greetingService.ts';
+import { createGreetingRoutes, createGreetingOutputRoutes } from './routes/greetingRoutes.ts';
 import { createAlertFontRoutes } from './routes/alertFontRoutes.ts';
 import { createCoreRoutes } from './routes/coreRoutes.ts';
 import { createPlaybackRoutes } from './routes/playbackRoutes.ts';
@@ -9,7 +11,7 @@ import { createStreamDeckRoutes } from './routes/streamDeckRoutes.ts';
 import { BotError } from './errors.ts';
 import { createCountdownRoutes } from './routes/countdownRoutes.ts';
 
-export function createApiRouter(options:{sessionToken:string;appVersion:string;overlayAssetsDir:string}) {
+export function createApiRouter(options:{sessionToken:string;appVersion:string;overlayAssetsDir:string;greetings?:GreetingService}) {
   const api=Router();
   let requestsInFlight=0;
   api.use((_req, res, next) => {
@@ -27,6 +29,8 @@ export function createApiRouter(options:{sessionToken:string;appVersion:string;o
     next();
   });
 
+  api.use(createGreetingOutputRoutes(options.greetings));
+
   api.use((req,_res,next)=>{
     if(['GET','HEAD','OPTIONS'].includes(req.method)) return next();
     if(req.headers['x-bot-session']!==options.sessionToken){ next(new BotError('AUTH_REQUIRED','Ungültige lokale Sitzung. Oberfläche neu laden.',403)); return; }
@@ -41,5 +45,6 @@ export function createApiRouter(options:{sessionToken:string;appVersion:string;o
   api.use(createQueueRoutes());
   api.use(createStreamDeckRoutes());
   api.use(createCountdownRoutes());
+  api.use(createGreetingRoutes(options.overlayAssetsDir,options.greetings));
   return api;
 }

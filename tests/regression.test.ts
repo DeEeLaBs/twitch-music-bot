@@ -555,7 +555,7 @@ test('Spotify track links resolve public metadata and enqueue a matching YouTube
  assert.equal(result.title, 'Never Gonna Give You Up');
  assert.equal(result.artist, 'Rick Astley');
  assert.equal(result.requestSource, 'spotify');
- assert.equal(result.originalRequestUrl, `https://open.spotify.com/track/${spotifyId}`);
+ assert.equal(result.originalRequestUrl, `https://open.spotify.com/track/${spotifyId}?si=test`);
  assert.equal(result.sourceTitle, 'Never Gonna Give You Up');
  assert.equal(result.sourceArtist, 'Rick Astley');
  assert.ok(calls.some(url => url.startsWith('https://open.spotify.com/oembed')));

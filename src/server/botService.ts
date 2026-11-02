@@ -1,13 +1,12 @@
 import './netDefaults.ts';
-import fs from 'node:fs';
-import path from 'node:path';
+import { GreetingRuntime, resolveGreetingUser } from './greetingRuntime.ts';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AppState, BadgeType, BotConfig, BotLog, ClientToServerMessage, QueueDelta, ServerToClientMessage, Track } from '../types.ts';
 import { applyChatClear, pushChatLine, type OverlayChatLine } from '../overlayChat.ts';
-import { DEFAULT_OVERLAY_OPTIONS, mergeOverlayOptions, type OverlayOptions } from '../overlayOptions.ts';
+import { mergeOverlayOptions, type OverlayOptions } from '../overlayOptions.ts';
 import { fetchEmoteIndex } from './chatEmotes.ts';
 import { loadOrCreateOverlayToken, tokensMatch } from './overlayAccess.ts';
-import { scheduleJsonWrite } from './atomicStore.ts';
+import { OverlayLibrary } from './overlayLibrary.ts';
 import { ConfigService } from './configService.ts';
 import { ChannelPointsService } from './channelPointsService.ts';
 import { QueueManager } from './queueManager.ts';
@@ -46,6 +45,8 @@ export class BotService {
   private twitchBot: TwitchBot;
   private streamPlaylistService: StreamPlaylistService;
   private twitchOAuth: TwitchOAuthService;
+  private greetings: GreetingRuntime | undefined;
+  public resolveGreetingUser(login: string) { return resolveGreetingUser(this.config, login); }
   private twitchRefreshTimer: NodeJS.Timeout | null = null;
   private logs: BotLog[] = [];
   private wsServer: WebSocketServer | null = null;
@@ -54,9 +55,14 @@ export class BotService {
   private rewardValidationTimer: NodeJS.Timeout | null = null;
   private lastQueueForWs: Track[] = [];
   private lastQueueSlices = new Map<keyof Pick<AppState, 'playback' | 'queue' | 'history' | 'voteSkip' | 'blacklist'>, string>();
-  private activeOverlay: OverlayOptions;
+  private overlays: OverlayLibrary | undefined;
+  public get overlayLibrary() { return this.overlays ??= new OverlayLibrary(); }
+  private get activeOverlay(): OverlayOptions {
+    return this.overlayLibrary.legacyOptions;
+  }
   private overlayToken = '';
   private chatClients = new Set<WebSocket>();
+  private overlayClients = new Map<WebSocket, string>();
   private widgetClients = new Set<WebSocket>();
   private chatLog: OverlayChatLine[] = [];
   private emoteNames: Record<string, string> = {};
@@ -66,15 +72,6 @@ export class BotService {
   constructor() {
     this.configService = new ConfigService();
     this.config = this.configService.get();
-    const overlayConfigFile = path.join(process.cwd(), 'data', 'overlay-config.json');
-    let initialOverlay: OverlayOptions = DEFAULT_OVERLAY_OPTIONS;
-    try {
-      if (fs.existsSync(overlayConfigFile)) {
-        const parsed = JSON.parse(fs.readFileSync(overlayConfigFile, 'utf-8'));
-        if (parsed && typeof parsed === 'object') initialOverlay = mergeOverlayOptions(parsed);
-      }
-    } catch {}
-    this.activeOverlay = initialOverlay;
     botEvents.on('playlist:track_added', data => this.broadcast({ type: 'playlist:track_added', data }));
     botEvents.on('config:changed', ({changedKeys}) => logger.log('info','CONFIG','Konfiguration geändert',{changedKeys}));
     botEvents.on('search:resolved', payload => logger.log('debug','SEARCH','Song-Suche aufgelöst',payload));
@@ -233,6 +230,7 @@ export class BotService {
         ws.on('close', () => {
           this.clients.delete(ws);
           this.chatClients.delete(ws);
+          this.overlayClients.delete(ws);
           this.widgetClients.delete(ws);
         });
 
@@ -241,6 +239,8 @@ export class BotService {
             const parsed = JSON.parse(raw.toString()) as ClientToServerMessage;
             if (parsed.type === 'get_state') {
               ws.send(JSON.stringify({ type: 'state', data: this.getFullState() }));
+            } else if (parsed.type === 'subscribe_overlay') {
+              this.subscribeOverlay(ws, parsed.token, parsed.overlayId);
             } else if (parsed.type === 'subscribe_chat' && this.overlayTokenMatches(parsed.token)) {
               this.chatClients.add(ws);
               ws.send(JSON.stringify({ type: 'chat_replay', data: this.chatLog }));
@@ -271,6 +271,10 @@ export class BotService {
       if (profile.finish.chatEnabled && profile.finish.chatMessage) this.twitchBot.sendMessage(profile.finish.chatMessage);
     });
     getCountdownDonations().start();
+    (this.greetings ??= new GreetingRuntime(() => this.config,undefined,undefined,text=>{
+      if(!this.twitchBot.getIsConnected())throw new Error('Twitch-Chat nicht verbunden.');
+      this.twitchBot.sendMessage(text);
+    })).start();
     void this.refreshEmotes();
     if (!this.emoteTimer) {
       this.emoteTimer = setInterval(() => void this.refreshEmotes(), 10 * 60 * 1000);
@@ -443,6 +447,25 @@ export class BotService {
     return this.activeOverlay;
   }
 
+  public subscribeOverlay(client: WebSocket, token: string, id: string) {
+    this.overlayClients.delete(client);
+    if (!this.overlayTokenMatches(token)) return;
+    const document = this.overlayLibrary.get(id);
+    this.overlayClients.set(client, document.id);
+    client.send(JSON.stringify({type:'overlay_document',data:{id:document.id,options:document.options}}));
+  }
+
+  public publishOverlay(id: string) {
+    let options: OverlayOptions | null = null;
+    try {options = this.overlayLibrary.get(id).options;} catch {}
+    const payload=JSON.stringify({type:'overlay_document',data:{id,options}});
+    for(const [client,overlayId] of this.overlayClients) {
+      if(overlayId === id && client.readyState === WebSocket.OPEN) {
+        try {client.send(payload);} catch {this.overlayClients.delete(client);}
+      }
+    }
+  }
+
   public setActiveOverlay(options: Partial<OverlayOptions>): OverlayOptions {
     const merged = mergeOverlayOptions({
       ...this.activeOverlay,
@@ -451,9 +474,8 @@ export class BotService {
       chat: { ...this.activeOverlay.chat, ...(options.chat || {}) },
       scene: options.scene === undefined ? this.activeOverlay.scene : options.scene
     });
-    this.activeOverlay = merged;
-    const overlayConfigFile = path.join(process.cwd(), 'data', 'overlay-config.json');
-    scheduleJsonWrite(overlayConfigFile, merged);
+    this.overlayLibrary.updateLegacy(merged);
+    this.publishOverlay(this.overlayLibrary.legacyId);
     this.broadcast({ type: 'overlay_update', data: merged });
     this.broadcastPatch({ activeOverlay: merged });
     return merged;
@@ -610,6 +632,7 @@ export class BotService {
   }
 
   public shutdown() {
+    this.greetings?.stop();
     stopCountdownService();
     stopCountdownDonations();
     this.configService.save();

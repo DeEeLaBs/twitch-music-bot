@@ -27,6 +27,58 @@ function workspace(t: { after: (fn: () => void) => void }) {
 }
 const event = (at: number, patch: Partial<CountdownBonus> = {}): CountdownBonus => ({ id: 'event', at, source: 'tip', user: 'Viewer', amount: 2.5, currency: 'EUR', ...patch });
 
+test('display snapshots omit event history while persistent deduplication survives restart', t => {
+  const w = workspace(t);
+  w.service.command('subathon', 'start');
+  w.service.accept(event(w.now()));
+  const snapshot = w.service.snapshot();
+  assert.equal('seen' in snapshot, false);
+  snapshot.profiles.subathon.title = 'Changed copy';
+  assert.notEqual(w.service.snapshot().profiles.subathon.title, 'Changed copy');
+  assert.equal(JSON.parse(fs.readFileSync(w.file, 'utf8')).seen[0].id, 'event');
+  const restarted = new CountdownService(w.file, w.now);
+  assert.equal(restarted.accept(event(w.now())), false);
+});
+
+test('legacy donation sockets disconnect when pong is missing even with a shorter ping interval', async t => {
+  const w = workspace(t);
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ datas: { host: 'https://sso-cf.tipeeestream.com' } }));
+  for (const provider of ['streamlabs', 'tipeeestream'] as const) {
+    const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    await once(server, 'listening');
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    let pings = 0;
+    const closed = new Promise<void>(resolve => server.once('connection', socket => {
+      socket.on('message', raw => { if (String(raw) === '2') pings++; });
+      socket.once('close', resolve);
+      socket.send(`0${JSON.stringify({ pingInterval: 1000, pingTimeout: 2000 })}`);
+      socket.send('40');
+    }));
+    const dir = path.dirname(w.file);
+    let clientClosed: Promise<unknown>;
+    const secrets = new SecureTokenStore(path.join(dir, `${provider}-timeout-secrets.json`), path.join(dir, `${provider}-timeout-key`));
+    const connections = new CountdownDonations(path.join(dir, `${provider}-timeout.json`), secrets,
+      () => {
+        const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+        clientClosed = once(socket, 'close');
+        return socket;
+      }, () => {});
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      connections.update(provider, { enabled: true, channel: '', username: 'streamer', token: 'synthetic-token' });
+      connections.start();
+      await Promise.race([closed, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Missing pong did not disconnect socket')), 4500); })]);
+      assert.equal(pings, 1);
+      await clientClosed!;
+      assert.equal(connections.snapshot()[provider].state, 'error');
+    } finally {
+      clearTimeout(timeout); connections.stop();
+      for (const socket of server.clients) socket.terminate();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  }
+});
+
 test('running time survives restart; paused time freezes and still accepts fractional bonuses', t => {
   const w = workspace(t);
   w.service.command('subathon', 'start');

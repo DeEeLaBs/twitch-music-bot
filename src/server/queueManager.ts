@@ -560,9 +560,9 @@ export class QueueManager {
     }
 
     // 2. Blacklist Check
-    const artistText = resolved.artist.toLowerCase();
-    const channelText = (resolved.channel || '').toLowerCase();
-    const checkText = `${resolved.title} ${resolved.artist}`.toLowerCase();
+    const artistText = `${resolved.artist} ${resolved.sourceArtist || ''}`.toLowerCase();
+    const channelText = `${resolved.channel || ''} ${resolved.sourceChannel || ''}`.toLowerCase();
+    const checkText = `${resolved.title} ${resolved.artist} ${resolved.sourceTitle || ''} ${resolved.sourceArtist || ''}`.toLowerCase();
     const isEn = this.config.language === 'en';
     for (const rule of this.blacklist) {
       if ((rule.type === 'artist' ? artistText : rule.type === 'channel' ? channelText : checkText).includes(rule.term)) {
@@ -606,6 +606,11 @@ export class QueueManager {
       requestedAt: Date.now(),
       requestSource: resolved.requestSource,
       originalRequestUrl: resolved.originalRequestUrl,
+      sourceSpotifyUri: resolved.sourceSpotifyUri,
+      sourceVideoId: resolved.sourceVideoId,
+      sourceTitle: resolved.sourceTitle,
+      sourceArtist: resolved.sourceArtist,
+      sourceChannel: resolved.sourceChannel,
       spotifyUri: resolved.spotifyUri,
       playbackProvider: resolved.spotifyUri && this.config.playbackProvider === 'spotify' ? 'spotify' : 'youtube_music'
     };

@@ -1,4 +1,6 @@
+import { chooseSongMatch, type SongMetadata } from './songMatch.ts';
 import crypto from 'node:crypto';
+import { spotifyPlaylistUri } from '../spotifyPlaylist.ts';
 import { spotifyPlaybackPollDelayMs } from './playbackPoll.ts';
 import { SecureTokenStore } from './secureTokenStore.ts';
 import { pickTextMatch, prepareTextSearch } from './textSearch.ts';
@@ -38,7 +40,9 @@ const SCOPES = [
   'user-read-currently-playing',
   'user-modify-playback-state',
   'playlist-modify-public',
-  'playlist-modify-private'
+  'playlist-modify-private',
+  'playlist-read-private',
+  'playlist-read-collaborative'
 ];
 
 export class SpotifyService {
@@ -448,27 +452,56 @@ export class SpotifyService {
     }
   }
 
-  async addToPlaylist(playlistIdOrUri: string, trackUri: string): Promise<{ success: boolean; error?: string }> {
+  async matchTrack(source: SongMetadata) {
+    const items = await this.searchSpotifyCatalog(`${source.artist} ${source.title}`,this.profile?.country || '');
+    const chosen = chooseSongMatch(source,items.filter(item=>typeof item.uri==='string'&&/^spotify:track:[A-Za-z0-9]{22}$/.test(item.uri)).map(item=>({id:item.uri,title:String(item.name||''),artist:(item.artists||[]).map((artist:{name:string})=>artist.name).join(', '),duration:Number(item.duration_ms)/1000,track:item})));
+    if(!chosen)throw new Error('Kein eindeutiger Spotify-Treffer für den Song gefunden.');
+    return this.spotifyTrackResult(chosen.track);
+  }
+
+  async resolvePlaylistTrack(track: { title: string; artist: string; duration?: number }): Promise<{ state: 'matched' | 'ambiguous' | 'not_found'; uri?: string }> {
+    const normalize = (value: string) => value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+      .replace(/\((?:official\s*)?(?:music\s*)?(?:video|audio|lyrics?)\)|\[(?:official\s*)?(?:music\s*)?(?:video|audio|lyrics?)\]/gi, '')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    if (!normalize(track.title) || !normalize(track.artist) || /^(unknown artist|unknown|unbekannt)$/i.test(track.artist.trim())) return { state: 'ambiguous' };
+    const items = await this.searchSpotifyCatalog(`${track.title} ${track.artist}`, this.profile?.country || '');
+    const matches = items.filter(item => typeof item.uri === 'string' && /^spotify:track:[A-Za-z0-9]{22}$/.test(item.uri) &&
+      normalize(String(item.name || '')) === normalize(track.title) &&
+      normalize((item.artists || []).map((artist: { name: string }) => artist.name).join(', ')) === normalize(track.artist) &&
+      (!track.duration || (Number.isFinite(item.duration_ms) && Math.abs(item.duration_ms / 1000 - track.duration) <= 5)));
+    const uris = [...new Set(matches.map(item => String(item.uri)))];
+    return uris.length === 1 ? { state: 'matched', uri: uris[0] } : { state: items.length ? 'ambiguous' : 'not_found' };
+  }
+
+  private playlistWrites: Promise<unknown> = Promise.resolve();
+  addToPlaylist(playlistIdOrUri: string, trackUri: string): Promise<{ success: boolean; alreadyExists?: boolean; error?: string; uncertain?: boolean }> {
+    const operation = this.playlistWrites.then(() => this.addUniquePlaylistTrack(playlistIdOrUri, trackUri));
+    this.playlistWrites = operation.catch(() => undefined);
+    return operation;
+  }
+  private async addUniquePlaylistTrack(playlistIdOrUri: string, trackUri: string): Promise<{ success: boolean; alreadyExists?: boolean; error?: string; uncertain?: boolean }> {
+    let writeStarted = false;
     try {
-      const match = playlistIdOrUri.match(/([a-zA-Z0-9]{22})/);
-      const playlistId = match ? match[1] : playlistIdOrUri;
-      if (!playlistId) return { success: false, error: 'Ungültige Playlist-ID' };
-
-      const response = await this.api(`/playlists/${encodeURIComponent(playlistId)}/tracks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uris: [trackUri] })
-      });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({})) as any;
-        const msg = data?.error?.message || `HTTP ${response.status}`;
-        return { success: false, error: msg };
+      const playlistId = spotifyPlaylistUri(playlistIdOrUri).split(':')[2];
+      if (!playlistId || !/^spotify:track:[A-Za-z0-9]{22}$/.test(trackUri)) return { success: false, uncertain: false, error: 'Ungültige Spotify-Playlist oder Track-ID.' };
+      // Never trust a cached membership check after an uncertain POST result.
+      for (let offset = 0; ; offset += 50) {
+        const page = await this.api(`/playlists/${playlistId}/items?limit=50&offset=${offset}`);
+        if (!page.ok) return { success: false, uncertain: false, error: `Spotify Playlist lesen: HTTP ${page.status}. Erneut anmelden und Playlist-Berechtigung prüfen.` };
+        const body = await page.json() as { items?: Array<{ item?: { uri?: string; linked_from?: { uri?: string } }; track?: { uri?: string; linked_from?: { uri?: string } } }>; next?: string | null };
+        if (!Array.isArray(body.items) || (body.next !== null && typeof body.next !== 'string')) return { success: false, uncertain: false, error: 'Ungültige Spotify-Playlist-Antwort.' };
+        if (body.items.some(value => [value.item?.uri, value.item?.linked_from?.uri, value.track?.uri, value.track?.linked_from?.uri].includes(trackUri))) return { success: true, alreadyExists: true };
+        if (!body.next) break;
+        if (offset >= 100000 || body.items.length === 0) return { success: false, uncertain: false, error: 'Spotify-Playlist konnte nicht vollständig geprüft werden.' };
       }
-
-      return { success: true };
-    } catch (err: any) {
-      return { success: false, error: err?.message || String(err) };
+      writeStarted = true;
+      const response = await this.api(`/playlists/${playlistId}/items`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uris: [trackUri] })
+      });
+      return response.ok ? { success: true } : { success: false, uncertain: response.status >= 500, error: `Spotify Playlist schreiben: HTTP ${response.status}. Berechtigung prüfen.` };
+    } catch (error) {
+      const rate = /Erneut in (\d+)s/.exec(error instanceof Error ? error.message : '');
+      return { success: false, uncertain: writeStarted && !rate, error: rate ? `Spotify-Anfragelimit: nach ${rate[1]} Sekunden erneut versuchen.` : 'Spotify-Anfrage nicht bestätigt. Später erneut versuchen.' };
     }
   }
 

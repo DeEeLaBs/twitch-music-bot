@@ -1,9 +1,29 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { EventSubClient } from '../src/server/eventSubClient.ts';
+import type { WebSocket } from 'ws';
 import { alertFromNotification, alertText, eventSubSubscriptions, pushAlert, type StreamAlert } from '../src/streamAlerts.ts';
 import { applyAlert, emptyStats, noteRequester, setGoal } from '../src/streamStats.ts';
 
 const alert = (kind: StreamAlert['kind'], at: number): StreamAlert => ({ id: `${kind}-${at}`, kind, user: kind, amount: 1, createdAt: at, message: '', months: 0, tier: '', currency: '', viewers: 0 });
+
+test('countdown storage failures do not suppress Twitch alerts and statistics', async () => {
+  const alerts: StreamAlert[] = [], logs: string[] = [];
+  let stats = emptyStats(Date.now());
+  const client = new EventSubClient(value => { alerts.push(value); stats = applyAlert(stats, value); },
+    message => logs.push(message), () => { throw new Error('private storage details'); });
+  const socket = {} as WebSocket;
+  const handler = client as unknown as { socket: WebSocket; onMessage: (raw: string, auth: object, subscribe: boolean, socket: WebSocket) => Promise<void> };
+  handler.socket = socket;
+  for (const type of ['channel.cheer', 'channel.subscribe', 'channel.subscription.gift']) {
+    await handler.onMessage(JSON.stringify({ metadata: { message_type: 'notification', message_id: type },
+      payload: { subscription: { type }, event: { user_name: 'Viewer', bits: 100, total: 5, tier: '1000', is_gift: false } } }), {}, false, socket);
+  }
+  assert.deepEqual(alerts.map(value => value.kind), ['cheer', 'subscription', 'communitygift']);
+  assert.equal(stats.cheers[0].value, 100);
+  assert.equal(logs.length, 3);
+  assert.doesNotMatch(logs.join(' '), /private storage details/);
+});
 
 test('alerts keep raids ahead of follows and drop the oldest follow when full', () => {
   let queue = [alert('follow', 1), alert('cheer', 2)];

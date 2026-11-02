@@ -5,7 +5,7 @@ export const translations = {
   en: {
     streamPlaylistTitle: "Stream playlist",
     streamPlaylistUrlLabel: "Stream playlist link (optional)",
-    streamPlaylistHint: "Favorites independent of the fallback playlist; leave blank to use the fallback.",
+    streamPlaylistHint: "For !playlist transfers to Spotify, enter the destination Spotify playlist here. Leave blank to save songs only locally. The playback fallback playlist is configured separately.",
     streamPlaylistExport: "Export text / CSV",
     streamPlaylistOpen: "Open playlist",
     streamPlaylistDelete: "Delete",
@@ -259,7 +259,7 @@ export const translations = {
   de: {
     streamPlaylistTitle: "Stream-Playlist",
     streamPlaylistUrlLabel: "Stream-Playlist-Link (optional)",
-    streamPlaylistHint: "Favoriten unabhängig von der Fallback-Playlist; leer verwendet den Fallback.",
+    streamPlaylistHint: "Für !playlist auf Spotify hier die gewünschte Spotify-Playlist eintragen. Bei leerem Feld werden Songs nur lokal gespeichert. Die Fallback-Playlist für die Wiedergabe wird separat eingestellt.",
     streamPlaylistExport: "Als Text / CSV exportieren",
     streamPlaylistOpen: "Playlist öffnen",
     streamPlaylistDelete: "Löschen",

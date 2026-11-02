@@ -25,6 +25,11 @@ export interface Track {
   requestedAt: number; // timestamp
   requestSource?: 'spotify' | 'youtube' | 'text';
   originalRequestUrl?: string;
+  sourceSpotifyUri?: string;
+  sourceVideoId?: string;
+  sourceTitle?: string;
+  sourceArtist?: string;
+  sourceChannel?: string;
   spotifyUri?: string;
   playbackProvider?: 'youtube_music' | 'spotify';
 }
@@ -191,6 +196,7 @@ export type ServerToClientMessage =
   | { type: 'queue_delta'; data: QueueDelta }
   | { type: 'playlist:track_added'; data: import('./server/streamPlaylistService.ts').StreamPlaylistEntry }
   | { type: 'overlay_update'; data: OverlayOptions }
+  | { type: 'overlay_document'; data: {id:string;options:OverlayOptions|null} }
   | { type: 'chat'; data: import('./overlayChat.ts').OverlayChatLine }
   | { type: 'chat_clear'; data: import('./overlayChat.ts').ChatClearEvent }
   | { type: 'chat_replay'; data: import('./overlayChat.ts').OverlayChatLine[] }
@@ -201,5 +207,6 @@ export type ServerToClientMessage =
 export type ClientToServerMessage =
   | { type: 'get_state' }
   | { type: 'subscribe_chat'; token: string }
+  | { type: 'subscribe_overlay'; token: string; overlayId: string }
   | { type: 'subscribe_widgets'; token: string }
   | { type: 'widget_action'; token: string; action: 'timer'; seconds: number };

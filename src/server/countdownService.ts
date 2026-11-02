@@ -49,7 +49,8 @@ export class CountdownService {
   }
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
   snapshot() {
-    return { ...structuredClone(this.state), serverNow: this.now(), storageError: this.storageError };
+    const { version, profiles, runs } = this.state;
+    return { ...structuredClone({ version, profiles, runs }), serverNow: this.now(), storageError: this.storageError };
   }
   private persist() { writeJson(this.file, this.state, { strictAtomic: true }); }
   private change(fn: () => void) {

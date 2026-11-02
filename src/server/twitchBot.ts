@@ -9,6 +9,7 @@ import { ChannelPointsService } from './channelPointsService.ts';
 import { botEvents } from './eventBus.ts';
 import { chatLanguage, localizeCompanionError, twitchMessage } from './twitchMessages.ts';
 import { commandDefaultAllows, parseCommand } from './commandRegistry.ts';
+import { playlistSyncLabel } from '../playlistSync.ts';
 import { StreamPlaylistService } from './streamPlaylistService.ts';
 import { getCountdownService } from './countdownService.ts';
 
@@ -313,6 +314,9 @@ export class TwitchBot {
     if (!parsed) return;
 
     const { sender, message: messageBody, tags } = parsed;
+    if (tags.id && /^\d+$/.test(tags['user-id'] || '') && (!tags['source-room-id'] || tags['source-room-id'] === tags['room-id'])) {
+      botEvents.emit('greeting:message', { id: tags.id, userId: tags['user-id'], channelId: tags['room-id'] || '', at: Number(tags['tmi-sent-ts']) });
+    }
     const chatLine = chatLineFromPrivmsg(parsed, this.config.twitchChannel);
     if (chatLine) botEvents.emit('chat:message', chatLine);
     const roomId = tags['room-id'];
@@ -593,7 +597,7 @@ export class TwitchBot {
       }
 
       const spotifyService = this.queueManager.spotifyService;
-      const configuredPlaylist = this.config.streamPlaylistUrl?.trim() || this.config.spotifyFallbackPlaylist;
+      const configuredPlaylist = this.config.streamPlaylistUrl?.trim();
       const playlistId = configuredPlaylist && (configuredPlaylist.startsWith("spotify:") || configuredPlaylist.includes("open.spotify.com/")) ? configuredPlaylist : undefined;
 
       const result = await this.streamPlaylistService.addTrack(
@@ -603,8 +607,11 @@ export class TwitchBot {
         playlistId
       );
 
+      const sync = result.entry?.spotifySync;
+      const spotifyNotice = sync ? ` Spotify: ${playlistSyncLabel(sync, this.config.language || 'en')}${sync.message ? ` – ${sync.message}` : ''}.` : '';
+
       if (result.alreadyExists) {
-        this.sendMessage(this.t('playlistAlreadyExists', { user: requester.displayName, title: current.title }));
+        this.sendMessage(this.t('playlistAlreadyExists', { user: requester.displayName, title: current.title }) + spotifyNotice);
         return;
       }
 
@@ -615,7 +622,7 @@ export class TwitchBot {
 
       if (result.entry) botEvents.emit('playlist:track_added', result.entry);
       this.log('mod', `Song "${current.title}" to stream playlist added by @${requester.displayName}`, requester.displayName, requester.badge);
-      this.sendMessage(this.t('playlistAdded', { user: requester.displayName, title: current.title, artist: current.artist }));
+      this.sendMessage(this.t('playlistAdded', { user: requester.displayName, title: current.title, artist: current.artist }) + spotifyNotice);
       return;
     }
   }

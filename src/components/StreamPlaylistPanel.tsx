@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { BotConfig } from '../types.ts';
 import type { StreamPlaylistEntry } from '../server/streamPlaylistService.ts';
+import { spotifyPlaylistUri } from '../spotifyPlaylist.ts';
+import { playlistSyncLabel } from '../playlistSync.ts';
 import { apiFetch } from '../apiClient.ts';
 import { useTranslations } from '../translations.ts';
 
 export function StreamPlaylistPanel({ config }: { config: BotConfig }) {
+  const ui = (de: string, en: string) => config.language === 'de' ? de : en;
   const t = useTranslations(config.language || 'en');
   const [items, setItems] = useState<StreamPlaylistEntry[]>([]);
   const [error, setError] = useState(false);
@@ -33,6 +36,15 @@ export function StreamPlaylistPanel({ config }: { config: BotConfig }) {
       await load();
     } catch { setError(true); } finally { setBusy(null); }
   };
+  const retry = async (id: string, useConfiguredPlaylist = false) => {
+    if (useConfiguredPlaylist && !window.confirm(ui('Diesen Song in die aktuell eingestellte Spotify-Stream-Playlist übertragen? Das bisherige Übertragungsziel wird ersetzt.', 'Transfer this song to the currently configured Spotify stream playlist? This replaces its previous transfer destination.'))) return;
+    setBusy(id);
+    try {
+      const response = await apiFetch(`/api/stream-playlist/${encodeURIComponent(id)}/retry`, { method: 'POST', headers: {'Content-Type':'application/json'}, body:JSON.stringify({useConfiguredPlaylist}) });
+      if (!response.ok) throw new Error();
+      await load();
+    } catch { setError(true); } finally { setBusy(null); }
+  };
   const exportFile = (csv: boolean) => {
     const cell = (value: string) => '"' + value.replace(/"/g, '""') + '"';
     const text = csv
@@ -42,7 +54,9 @@ export function StreamPlaylistPanel({ config }: { config: BotConfig }) {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = `stream-playlist.${csv ? 'csv' : 'txt'}`; anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-  const configured = config.streamPlaylistUrl?.trim() || config.spotifyFallbackPlaylist?.trim() || '';
+  const configured = config.streamPlaylistUrl?.trim() || '';
+  let configuredUri = '';
+  try {configuredUri = spotifyPlaylistUri(configured);} catch {}
   const playlistUrl = configured.replace(/^spotify:playlist:/, 'https://open.spotify.com/playlist/');
   const safeUrl = /^https:\/\//.test(playlistUrl) ? playlistUrl : '';
   return <section className="mt-6 bg-neutral-900 border border-neutral-800 rounded-2xl p-5 space-y-4">
@@ -54,11 +68,17 @@ export function StreamPlaylistPanel({ config }: { config: BotConfig }) {
     </div>
     {error && <p role="alert" className="text-red-300">{t('streamPlaylistError')}</p>}
     {!items.length ? <p className="text-neutral-400">{t('streamPlaylistEmpty')}</p> : <div className="overflow-x-auto"><table className="w-full text-sm text-left text-neutral-300">
-      <thead><tr><th>{t('streamPlaylistTrack')}</th><th>Provider</th><th>{t('streamPlaylistAddedBy')}</th><th>{t('streamPlaylistDate')}</th><th /></tr></thead>
+      <thead><tr><th>{t('streamPlaylistTrack')}</th><th>Provider</th><th>{t('streamPlaylistAddedBy')}</th><th>{t('streamPlaylistDate')}</th><th>Spotify</th><th /></tr></thead>
       <tbody>{items.map(item => <tr key={item.id} className="border-t border-neutral-800">
         <td className="py-3"><div className="flex items-center gap-3">{item.albumArtUrl ? <img src={item.albumArtUrl} alt="" className="w-10 h-10 rounded object-cover" /> : <span aria-hidden="true" className="w-10 h-10 rounded bg-purple-950 flex items-center justify-center">♪</span>}<span><strong className="text-white">{item.title}</strong><br />{item.artist}</span></div></td>
         <td><span className="rounded px-2 py-1 bg-neutral-800">{item.playbackProvider === 'spotify' ? 'Spotify' : item.playbackProvider === 'youtube_music' ? 'YouTube' : '—'}</span></td>
         <td>@{item.addedBy}</td><td>{new Date(item.addedAt).toLocaleString(config.language === 'de' ? 'de-DE' : 'en-GB')}</td>
+        <td className="max-w-xs py-3"><span role="status">{playlistSyncLabel(item.spotifySync, config.language || 'en')}</span>
+          {item.spotifySync?.message && <p className="text-xs text-neutral-400">{item.spotifySync.message}</p>}
+          {!!item.spotifySync?.retryAfter && item.spotifySync.retryAfter > Date.now() && <p className="text-xs text-neutral-400">{ui('Erneuter Versuch ab', 'Retry after')} {new Date(item.spotifySync.retryAfter).toLocaleTimeString()}</p>}
+          {item.spotifySync && !['added', 'already_present'].includes(item.spotifySync.state) && <button type="button" className="block text-purple-300 disabled:opacity-50" disabled={busy !== null || (item.spotifySync.retryAfter || 0) > Date.now()} onClick={() => void retry(item.id)}>{ui('Erneut versuchen', 'Retry Spotify')}</button>}
+          {item.spotifySync?.playlist && configuredUri && item.spotifySync.playlist !== configuredUri && !['added','already_present'].includes(item.spotifySync.state) && <button type="button" className="block text-purple-300 disabled:opacity-50" disabled={busy !== null || (item.spotifySync.retryAfter || 0) > Date.now()} onClick={()=>void retry(item.id,true)}>{ui('In eingestellte Playlist übertragen', 'Transfer to configured playlist')}</button>}
+        </td>
         <td><button disabled={busy !== null} className="text-red-300 disabled:opacity-50" onClick={() => void remove(item.id)}>{t('streamPlaylistDelete')}</button></td>
       </tr>)}</tbody>
     </table></div>}

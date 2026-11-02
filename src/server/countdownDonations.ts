@@ -109,9 +109,10 @@ export class CountdownDonations {
     let retry: ReturnType<typeof setTimeout> | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let pongTimeout: ReturnType<typeof setTimeout> | undefined;
     const abort = new AbortController();
     this.stops.set(provider, () => {
-      stopped = true; abort.abort(); clearTimeout(retry); clearTimeout(watchdog); clearInterval(heartbeat); socket?.terminate();
+      stopped = true; abort.abort(); clearTimeout(retry); clearTimeout(watchdog); clearTimeout(pongTimeout); clearInterval(heartbeat); socket?.terminate();
     });
     const accept = (raw: unknown) => {
       for (const event of donationEvents(provider, raw)) this.acceptBonus(event);
@@ -158,11 +159,11 @@ export class CountdownDonations {
                 const interval = Math.max(1000, Math.min(60000, Number(hello.pingInterval) || 25000));
                 clearInterval(heartbeat);
                 heartbeat = setInterval(() => {
-                  if (current.readyState !== WebSocket.OPEN) return;
+                  if (current.readyState !== WebSocket.OPEN || pongTimeout) return;
                   current.send('2');
-                  clearTimeout(watchdog); watchdog = setTimeout(() => current.terminate(), Math.max(1000, Math.min(30000, Number(hello.pingTimeout) || 10000))); watchdog.unref();
+                  pongTimeout = setTimeout(() => current.terminate(), Math.max(1000, Math.min(30000, Number(hello.pingTimeout) || 10000))); pongTimeout.unref();
                 }, interval); heartbeat.unref();
-              } else if (raw === '3') clearTimeout(watchdog);
+              } else if (raw === '3') { clearTimeout(pongTimeout); pongTimeout = undefined; }
               else if (raw === '2') current.send('3');
               else if (raw === '40') {
                 status('connected'); attempt = 0; clearTimeout(watchdog);
@@ -178,7 +179,7 @@ export class CountdownDonations {
           clearTimeout(watchdog); watchdog = setTimeout(() => current.terminate(), 70000); watchdog.unref();
         });
         current.on('error', () => { status('error', 'Verbindung fehlgeschlagen; erneuter Versuch folgt.'); current.terminate(); });
-        current.on('close', () => { clearInterval(heartbeat); clearTimeout(watchdog); schedule(); });
+        current.on('close', () => { clearInterval(heartbeat); clearTimeout(watchdog); clearTimeout(pongTimeout); pongTimeout = undefined; schedule(); });
       } catch { schedule(); }
     };
     const schedule = () => {

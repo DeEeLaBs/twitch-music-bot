@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { chooseSongMatch, sameSong, type SongMetadata } from './songMatch.ts';
 import path from 'node:path';
 import { scheduleJsonWrite } from './atomicStore.ts';
 import { CircuitBreaker } from './circuitBreaker.ts';
@@ -31,6 +32,9 @@ export interface ResolvedTrackInfo {
   url: string;
   requestSource?: 'spotify' | 'youtube' | 'text';
   originalRequestUrl?: string;
+  sourceSpotifyUri?: string;
+  sourceVideoId?: string;
+  sourceChannel?: string;
   sourceTitle?: string;
   sourceArtist?: string;
   spotifyUri?: string;
@@ -38,7 +42,7 @@ export interface ResolvedTrackInfo {
 
 type AnyObject = Record<string, any>;
 
-export type ResolverErrorCode = 'EMPTY_QUERY' | 'NETWORK_ERROR' | 'NO_RESULTS' | 'INVALID_VIDEO' | 'UPSTREAM_CHANGED' | 'TIMEOUT' | 'SPOTIFY_METADATA' | 'SPOTIFY_UNSUPPORTED';
+export type ResolverErrorCode = 'RATE_LIMITED' | 'EMPTY_QUERY' | 'NETWORK_ERROR' | 'NO_RESULTS' | 'INVALID_VIDEO' | 'UPSTREAM_CHANGED' | 'TIMEOUT' | 'SPOTIFY_METADATA' | 'SPOTIFY_UNSUPPORTED';
 
 export class ResolverError extends Error {
   public readonly code: ResolverErrorCode;
@@ -56,6 +60,7 @@ interface SpotifyOEmbedPayload { title?: string; thumbnail_url?: string; provide
 interface SpotifyMetadata { trackId: string; url: string; title: string; artist: string; duration?: number; thumbnailUrl?: string; }
 
 export class YouTubeResolver {
+  private static rateLimitedUntil = 0;
   private static cache = new Map<string, CacheEntry>();
   private static cacheHits = 0;
   private static cacheMisses = 0;
@@ -78,14 +83,17 @@ export class YouTubeResolver {
     const trimmed = input.trim();
     if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
 
-    const watchMatch = trimmed.match(/(?:music\.)?youtube\.com\/watch\?(?:.*&)?v=([a-zA-Z0-9_-]{11})/);
-    if (watchMatch?.[1]) return watchMatch[1];
-
-    const shortMatch = trimmed.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
-    if (shortMatch?.[1]) return shortMatch[1];
-
-    const pathMatch = trimmed.match(/(?:music\.)?youtube\.com\/(?:embed|v|shorts|live)\/([a-zA-Z0-9_-]{11})/);
-    if (pathMatch?.[1]) return pathMatch[1];
+    try {
+      const url = new URL(trimmed);
+      if (!['http:','https:'].includes(url.protocol) || url.username || url.password || url.port) return null;
+      const host = url.hostname.toLowerCase();
+      let id: string | null = null;
+      if (host === 'youtu.be') id = url.pathname.match(/^\/([\w-]{11})\/?$/)?.[1] || null;
+      else if (['youtube.com','www.youtube.com','m.youtube.com','music.youtube.com'].includes(host)) {
+        id = url.pathname === '/watch' ? url.searchParams.get('v') : url.pathname.match(/^\/(?:embed|v|shorts|live)\/([\w-]{11})\/?$/)?.[1] || null;
+      }
+      return id && /^[\w-]{11}$/.test(id) ? id : null;
+    } catch {}
 
     return null;
   }
@@ -97,8 +105,8 @@ export class YouTubeResolver {
     if (uri?.[1]) return uri[1];
     try {
       const url = new URL(trimmed);
-      if (url.hostname.toLowerCase() !== 'open.spotify.com') return null;
-      const match = url.pathname.match(/\/(?:intl-[a-z-]+\/)?track\/([A-Za-z0-9]{22})(?:\/|$)/i);
+      if (!['http:','https:'].includes(url.protocol) || url.hostname.toLowerCase() !== 'open.spotify.com' || url.username || url.password || url.port) return null;
+      const match = url.pathname.match(/^\/(?:intl-[a-z-]+\/)?(?:embed\/)?track\/([A-Za-z0-9]{22})\/?$/i);
       return match?.[1] || null;
     } catch { return null; }
   }
@@ -119,7 +127,7 @@ export class YouTubeResolver {
 
     const spotifyId = this.extractSpotifyTrackId(trimmed);
     if (spotifyId) {
-      const spotifyKey = `spotify-song-first:${spotifyId}`;
+      const spotifyKey = `spotify-strict-v2:${spotifyId}`;
       const cached = this.getCached(spotifyKey);
       if (cached) { this.cacheHits++; return { ...cached }; }
       const negative = this.negativeCache.get(spotifyKey);
@@ -244,18 +252,8 @@ export class YouTubeResolver {
 
   private static async resolveSpotifyTrack(originalInput: string, trackId: string): Promise<ResolvedTrackInfo> {
     const metadata = await this.fetchSpotifyMetadata(trackId);
-    const query = metadata.artist ? `${metadata.artist} ${metadata.title}` : metadata.title;
-    if (!query.trim()) throw new ResolverError('SPOTIFY_METADATA', 'Spotify-Metadaten konnten nicht ermittelt werden.');
-
-    let source: 'ytm' | 'youtube' = 'ytm';
-    let result = await this.searchYouTubeMusic(query);
-    if (!result || !this.isLikelySpotifyMatch(metadata, result)) {
-      source = 'youtube';
-      result = await this.searchYouTubeVideo(query);
-    }
-    if (!result || !this.isLikelySpotifyMatch(metadata, result)) {
-      throw new ResolverError('NO_RESULTS', 'Kein eindeutiger YouTube-Music-Treffer für den Spotify-Song gefunden.');
-    }
+    const result = await this.resolveMatchingTrack(metadata);
+    const source = 'ytm' as const;
     botEvents.emit('search:resolved',{query:`Spotify: ${metadata.artist ? metadata.artist + ' - ' : ''}${metadata.title}`,videoId:result.videoId,source});
     return {
       ...result,
@@ -264,11 +262,22 @@ export class YouTubeResolver {
       // different video thumbnail, which made the Control Center cover appear wrong.
       thumbnailUrl: metadata.thumbnailUrl || result.thumbnailUrl,
       requestSource: 'spotify',
-      originalRequestUrl: metadata.url || originalInput,
+      originalRequestUrl: originalInput,
       sourceTitle: metadata.title,
       sourceArtist: metadata.artist,
       spotifyUri: `spotify:track:${trackId}`
     };
+  }
+
+  public static async resolveMatchingTrack(metadata: SongMetadata): Promise<ResolvedTrackInfo> {
+    if (!metadata.title || !metadata.artist) throw new ResolverError('NO_RESULTS','Quellmetadaten unvollständig; keine sichere Song-Zuordnung möglich.');
+    const query = `${metadata.artist} ${metadata.title}`;
+    let result: ResolvedTrackInfo | null;
+    try {result = await this.searchYouTubeMusic(query,undefined,undefined,metadata)
+      || await this.searchYouTubeVideo(query,undefined,undefined,metadata);}
+    catch(error){if(error instanceof ResolverError)throw error;throw new ResolverError('NO_RESULTS',error instanceof Error && /eindeutig/.test(error.message)?error.message:'YouTube-Suche derzeit nicht erreichbar. Bitte später erneut versuchen.');}
+    if (!result) throw new ResolverError('NO_RESULTS','Kein eindeutiger YouTube-Music-Treffer für den Song gefunden.');
+    return result;
   }
 
   private static async fetchSpotifyMetadata(trackId: string): Promise<SpotifyMetadata> {
@@ -280,8 +289,8 @@ export class YouTubeResolver {
     let oembed: SpotifyOEmbedPayload = {};
     let html = '';
     const [oembedResult, embedResult] = await Promise.allSettled([
-      fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(8000), headers }),
-      fetch(`https://open.spotify.com/embed/track/${trackId}`, { signal: AbortSignal.timeout(8000), headers })
+      fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`, { redirect: 'error', signal: AbortSignal.timeout(8000), headers }),
+      fetch(`https://open.spotify.com/embed/track/${trackId}`, { redirect: 'error', signal: AbortSignal.timeout(8000), headers })
     ]);
     if (oembedResult.status === 'fulfilled' && oembedResult.value.ok) {
       try { oembed = await oembedResult.value.json() as SpotifyOEmbedPayload; } catch { /* continue with embed HTML */ }
@@ -370,25 +379,6 @@ export class YouTubeResolver {
     return { trackId, url, title, artist, duration, thumbnailUrl: oembed.thumbnail_url };
   }
 
-  private static isLikelySpotifyMatch(metadata: SpotifyMetadata, candidate: ResolvedTrackInfo): boolean {
-    const norm = (value: string) => this.normalizeSearchText(value);
-    const sourceTitle = norm(metadata.title);
-    const targetTitle = norm(candidate.title);
-    if (!sourceTitle || !targetTitle) return false;
-    const titleTokens = new Set(sourceTitle.split(' ').filter(Boolean));
-    const candidateTitleTokens = new Set(targetTitle.split(' ').filter(Boolean));
-    const overlap = [...titleTokens].filter(token => candidateTitleTokens.has(token)).length;
-    const titleRatio = overlap / Math.max(1, Math.min(titleTokens.size, candidateTitleTokens.size));
-    const titleOk = sourceTitle === targetTitle || sourceTitle.includes(targetTitle) || targetTitle.includes(sourceTitle) || titleRatio >= 0.6;
-    if (!titleOk) return false;
-    if (!metadata.artist) return true;
-    const sourceArtistTokens = new Set(norm(metadata.artist).split(' ').filter(Boolean));
-    const targetCombined = new Set(norm(`${candidate.artist} ${candidate.channel || ''}`).split(' ').filter(Boolean));
-    if (!sourceArtistTokens.size) return true;
-    const artistOverlap = [...sourceArtistTokens].filter(token => targetCombined.has(token)).length;
-    return artistOverlap / sourceArtistTokens.size >= 0.5;
-  }
-
   private static findSpotifyTrackEntity(root: unknown, trackId: string): AnyObject | null {
     // Avoid recursive descent on third-party JSON: an unexpectedly deep payload should
     // never be able to exhaust the Node call stack. Pointer index avoids O(N) array shifts.
@@ -454,7 +444,7 @@ export class YouTubeResolver {
     try {
       const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(ytUrl)}&format=json`;
       const oembedRes = await fetch(oembedUrl, {
-        signal: AbortSignal.timeout(8000),
+        redirect: 'error', signal: AbortSignal.timeout(8000),
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
       });
       if (oembedRes.ok) {
@@ -467,7 +457,7 @@ export class YouTubeResolver {
 
     try {
       const pageRes = await fetch(ytUrl, {
-        signal: AbortSignal.timeout(8000),
+        redirect: 'error', signal: AbortSignal.timeout(8000),
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7'
@@ -505,7 +495,7 @@ export class YouTubeResolver {
    * canonical song result exists in YouTube Music.
    * scoringQuery, when set, rejects a top hit that does not share the requested title.
    */
-  private static async searchYouTubeMusic(query: string, scoringQuery?: string, hints?: TextMatchHints): Promise<ResolvedTrackInfo | null> {
+  private static async searchYouTubeMusic(query: string, scoringQuery?: string, hints?: TextMatchHints, strict?: SongMetadata): Promise<ResolvedTrackInfo | null> {
     try {
       const html = await this.fetchSearchDocument(`https://music.youtube.com/search?q=${encodeURIComponent(query)}`);
       let data = this.extractInitialData(html);
@@ -513,6 +503,12 @@ export class YouTubeResolver {
       if (!candidates.length) {
         const apiData = await this.innertubeMusicSearch(query, html);
         if (apiData) candidates = this.collectYtmSongCandidates(apiData);
+      }
+      if (strict) {
+        const matchingNames = candidates.filter(candidate => sameSong(strict,{...candidate,duration:candidate.duration || strict.duration || 1}));
+        const completed = await Promise.all(matchingNames.map(async candidate => ({...candidate,duration:candidate.duration || await this.lookupDuration(candidate.videoId),id:candidate.videoId})));
+        const chosen = chooseSongMatch(strict,completed);
+        return chosen ? {...chosen,channel:chosen.artist,url:`https://music.youtube.com/watch?v=${chosen.videoId}`} : null;
       }
       const phrase = scoringQuery || query;
       const pool = scoringQuery
@@ -535,6 +531,7 @@ export class YouTubeResolver {
       }
     } catch (error) {
       this.noteError(error);
+      if (strict) throw error;
       // YouTube Music is best-effort; normal YouTube is the explicit fallback.
     }
     return null;
@@ -670,7 +667,7 @@ export class YouTubeResolver {
     try {
       const res = await fetch(`https://music.youtube.com/youtubei/v1/search?key=${encodeURIComponent(key)}&prettyPrint=false`, {
         method: 'POST',
-        signal: AbortSignal.timeout(8000),
+        redirect: 'error', signal: AbortSignal.timeout(8000),
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -692,6 +689,7 @@ export class YouTubeResolver {
   }
 
   private static async fetchSearchDocument(url: string, init?: RequestInit): Promise<string> {
+    if(this.rateLimitedUntil > Date.now()) throw new ResolverError('RATE_LIMITED',`YouTube-Anfragelimit: in ${Math.ceil((this.rateLimitedUntil-Date.now())/1000)} Sekunden erneut versuchen.`);
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -699,8 +697,15 @@ export class YouTubeResolver {
         headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
         headers.set('Accept-Language', 'en-US,en;q=0.9,de-DE;q=0.8,de;q=0.7');
         headers.set('Cookie', 'SOCS=CAE');
-        const res = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(8000) });
-        if ((res.status === 429 || res.status >= 500) && attempt === 0) {
+        const res = await fetch(url, { ...init, headers, redirect:'error', signal: AbortSignal.timeout(8000) });
+        if(res.status === 429) {
+          const header=res.headers.get('retry-after') || '60';
+          const seconds=/^\d+$/.test(header)?Number(header):Math.ceil((Date.parse(header)-Date.now())/1000);
+          const wait=Number.isFinite(seconds)?Math.max(1,Math.min(seconds,3600)):60;
+          this.rateLimitedUntil=Date.now()+wait*1000;
+          throw new ResolverError('RATE_LIMITED',`YouTube-Anfragelimit: in ${wait} Sekunden erneut versuchen.`);
+        }
+        if (res.status >= 500 && attempt === 0) {
           lastError = new ResolverError('NETWORK_ERROR', `Song-Suche antwortet mit HTTP ${res.status}.`);
           await new Promise(resolve => setTimeout(resolve, 400));
           continue;
@@ -708,6 +713,7 @@ export class YouTubeResolver {
         if (!res.ok) throw new ResolverError('NETWORK_ERROR', `Song-Suche antwortet mit HTTP ${res.status}.`);
         return await res.text();
       } catch (error) {
+        if(error instanceof ResolverError && error.code==='RATE_LIMITED')throw error;
         lastError = error;
         if (attempt === 0) {
           await new Promise(resolve => setTimeout(resolve, 250));
@@ -769,7 +775,7 @@ export class YouTubeResolver {
   }
 
   /** Fallback: search normal YouTube only after YTM has no usable song result. scoringQuery keeps text search from accepting an unrelated first video. */
-  private static async searchYouTubeVideo(query: string, scoringQuery?: string, hints?: TextMatchHints): Promise<ResolvedTrackInfo | null> {
+  private static async searchYouTubeVideo(query: string, scoringQuery?: string, hints?: TextMatchHints, strict?: SongMetadata): Promise<ResolvedTrackInfo | null> {
     const phrase = scoringQuery || query;
     let html = '';
     try {
@@ -787,6 +793,7 @@ export class YouTubeResolver {
         const video = (item as AnyObject).videoRenderer as AnyObject | undefined;
         if (!video?.videoId) continue;
         const videoId = String(video.videoId);
+        if(!/^[\w-]{11}$/.test(videoId))continue;
         let title = video.title?.runs?.[0]?.text || 'Track';
         let artist = String(video.ownerText?.runs?.[0]?.text || 'Artist').replace(' - Topic', '');
         const duration = video.lengthText?.simpleText ? this.parseDurationString(video.lengthText.simpleText) : 0;
@@ -799,6 +806,7 @@ export class YouTubeResolver {
         candidates.push({ channel: video.ownerText?.runs?.[0]?.text || '', videoId, title, artist, duration, thumbnailUrl, url: `https://music.youtube.com/watch?v=${videoId}` });
       }
     }
+    if (strict) return chooseSongMatch(strict,candidates.map(candidate=>({...candidate,id:candidate.videoId})));
     const ranked = candidates
       .map(candidate => ({ candidate, judged: judgeTextMatch(phrase, candidate.title, candidate.artist, hints) }))
       .sort((a, b) => b.judged.score - a.judged.score);
@@ -878,12 +886,7 @@ export class YouTubeResolver {
   }
 
   private static cleanTitle(title: string): string {
-    return title
-      .replace(/\(Official (?:Music )?Video.*?\)/ig, '')
-      .replace(/\[Official (?:Music )?Video.*?\]/ig, '')
-      .replace(/\(Official Audio.*?\)/ig, '')
-      .replace(/\[Official Audio.*?\]/ig, '')
-      .trim();
+    return title.replace(/\((?:Official\s*)?(?:Music\s*)?(?:Video|Audio|Lyrics?)\)|\[(?:Official\s*)?(?:Music\s*)?(?:Video|Audio|Lyrics?)\]/gi, '').trim();
   }
 
   /** Convert duration string ("3:45" or "1:15:30") to seconds. */

@@ -1,0 +1,19 @@
+# Native Fensterbuttons unter Windows
+
+Nur das Electron-Hauptfenster aktiviert `titleBarStyle: hidden` zusammen mit `titleBarOverlay`. Die nativen Buttons für Minimieren, Maximieren/Wiederherstellen und Schließen bleiben erhalten; es werden keine HTML-Fensterbuttons und keine zusätzliche sichtbare Kopfzeile eingeführt. Der normale native Rahmen bleibt aktiviert, damit Größenänderung und Windows-Fensterfunktionen erhalten bleiben.
+
+Die verwendete Electron-Version ist Castlabs Electron 44.1.0. Die Optionen stehen in `desktop/windowChrome.cjs` und werden ausschließlich beim Hauptfenster angewendet. Andere Betriebssysteme erhalten unveränderte Fensteroptionen. Zusätzliche Player- und Anmeldefenster werden nicht angepasst.
+
+Die Oberfläche liest ausschließlich die native Window-Controls-Overlay-Geometrie. Sie benötigt dafür keine neue Preload- oder IPC-Funktion. Die vorhandenen Electron-Sicherheitsoptionen und die Schließ-/Beendigungslogik bleiben unverändert.
+
+Bei Größenänderungen aktualisiert die Oberfläche den reservierten rechten Bereich. Overlay-, Alert- und Dock-Designer berücksichtigen diesen Bereich in ihren bestehenden Werkzeugleisten. Freie Werkzeugleistenbereiche dienen zum Verschieben; interaktive Elemente sind davon ausgenommen. In den übrigen Ansichten lässt sich der freie Bereich oben neben dem Menü zum Verschieben nutzen. Browser und OBS aktivieren diese Gestaltung nicht.
+
+Auch bei integrierten Werkzeugleisten bleibt ein zehn Pixel hoher Ziehbereich am oberen Rand zwischen Menü und nativen Fensterbuttons bestehen. Die Werkzeugleisten selbst dürfen nicht pauschal als `no-drag` markiert werden, weil dies ihre enthaltenen Ziehflächen ausschließt; nur interaktive Elemente erhalten diese Ausnahme. Nach dieser Korrektur wurden Typprüfung, 33 relevante Tests und Build erneut erfolgreich ausgeführt.
+
+Hintergrund-Webviews dürfen ebenfalls keine expliziten `no-drag`-Rechtecke erhalten: Der inaktive Player bleibt mit `position:fixed; inset:0; opacity:0` geladen. Seine unsichtbare Geometrie würde sonst die Ziehregion des Hauptfensters ausschließen. Die Player liegen außerhalb der Ziehflächen und benötigen diese Ausnahme nicht. Diese zusätzliche Korrektur wurde gebaut und typgeprüft; die beiden Geometrie-Tests sind erfolgreich. Der native Verschiebetest dieser Korrektur steht bis zum vollständigen Neustart aus.
+
+Bei geöffnetem Navigationsmenü deaktiviert `is-menu-open` sämtliche Ziehflächen einschließlich der Pseudoelemente in den Designer-Kopfzeilen. Electron berücksichtigt dafür nicht allein die sichtbare Stapelreihenfolge; der Schließen-Button und der Hintergrund müssen zuverlässig Klicks erhalten. Das Schließen per Kreuz wurde im Browser geprüft (`aria-hidden=true`, Menüzustand geschlossen). Typprüfung, Geometrie-Tests und Build sind erfolgreich; die native Prüfung dieser Änderung erfordert die aktualisierte Desktop-Ansicht.
+
+Die ursprüngliche Morph-Animation ist wiederhergestellt: Der runde Menübutton wächst zunächst zum quadratischen Bildbereich und öffnet sich danach zur vollständigen Seitenleiste. Statt Breite, Höhe und Position des Inhalts pro Bild zu verändern, animiert sie eine `clip-path`-Maske um den fest dimensionierten Drawer und transformiert das Avatarbild separat. Menütexte werden eingeblendet, ohne neu umgebrochen zu werden. Animationen laufen kürzer (600/440 ms), übernehmen bei Richtungswechseln den aktuellen Fortschritt und entfernen temporäre Compositing-Hinweise nach Abschluss. Größenänderungen und reduzierte Bewegung werden berücksichtigt; Fokuswechsel verwenden `preventScroll`.
+
+Geprüft: Typprüfung, vier gezielte Tests für Morph-Geometrie und Fenstergeometrie sowie Build. Im Browser bleiben Breite/Höhe während einer laufenden Maske konstant (288 × 720 px); Öffnen, Schließen, erneutes Öffnen und Escape funktionieren. Die visuelle Prüfung im nativen Desktop-Fenster erfordert die aktualisierte Ansicht.

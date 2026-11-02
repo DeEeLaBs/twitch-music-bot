@@ -1,4 +1,5 @@
 const { app, BrowserWindow, shell, session } = require('electron');
+const {mainWindowChrome}=require('./windowChrome.cjs');
 const path = require('node:path');
 const fs = require('node:fs');
 const { hasGoogleLogin, startGoogleAuth } = require('./googleAuth.cjs');
@@ -196,6 +197,7 @@ if (!isPrimaryInstance) {
     }
 
     win = new BrowserWindow({
+      ...mainWindowChrome(),
       width: 1250,
       height: 900,
       minWidth: 960,

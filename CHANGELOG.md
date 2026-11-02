@@ -1,3 +1,28 @@
+# v1.10.0 – 2026-11-02
+
+## Neu
+
+- Mehrere unabhängig gespeicherte Overlays mit eigenen Namen und stabilen OBS-Adressen; Erstellen, Duplizieren, Umbenennen und Löschen im Designer. Das bisherige Overlay und seine Adresse bleiben erhalten.
+- Automatisches Speichern von Overlay-Änderungen und Aktualisierung der jeweiligen OBS-Quelle.
+- Persönliche Begrüßungen bei der ersten Nachricht pro Stream: Sound, GIF und Chattext getrennt aktivierbar, mit Personenliste, Suche und lokaler Vorschau.
+- Chat-Begrüßungen unterstützen `{user}` und `{name}` und funktionieren ohne OBS.
+- `!playlist` überträgt neue lokale Songs zusätzlich in die konfigurierte Spotify-Stream-Playlist, mit dauerhaftem Status, Duplikatprüfung und Wiederholungsmöglichkeit.
+- Dienstübergreifende Songlinks über Chat und Dashboard: Spotify-Links bei YouTube Music und YouTube-/YouTube-Music-Links bei Spotify. Die Wiedergabe bleibt beim gewählten Dienst; unsichere Zuordnungen werden abgelehnt.
+
+## Verbessert und behoben
+
+- Native Windows-Fensterbuttons in der App-Oberfläche statt separater Titelleiste am Hauptfenster.
+- Optimierte Morph-Animation des Menüs mit festen Inhaltsabmessungen; Ziehflächen werden bei geöffnetem Menü deaktiviert.
+- Begrüßungs-Einstellungen mit getrennten Bereichen für Ausgabe, Personen, Medien, Chattext und Speichern.
+- Spotify überspringt beim Klick im eingebetteten Player nur noch einen Song. Der Player-Klick wird ausschließlich über die Bot-Steuerung verarbeitet; programmatische Klicks erzeugen keinen zweiten Skip.
+- Ergänzte Regressionstests für Overlay-Speicherung, Begrüßungen, Playlist-Synchronisierung, Songzuordnung und Wiedergabe.
+- Sicherheitsaktualisierungen für HTTP-Verarbeitung und Build-Werkzeuge innerhalb der bestehenden Abhängigkeitsbereiche.
+
+## Update
+
+- Vorhandenen `data`-Ordner sichern und bei einem Wechsel des Portable-Ordners gemäß `docs/STANDALONE.md` übernehmen. Das Download-Paket enthält keine persönlichen Einstellungen oder Zugangsdaten.
+- Nach dem Update den Bot vollständig neu starten, damit Desktop-Preload und Server gemeinsam aktualisiert werden.
+
 # v1.9.0
 
 - Neues Countdown Studio für Streamstart und Subathons mit eigenen OBS-Links und frei einstellbarer Gestaltung.

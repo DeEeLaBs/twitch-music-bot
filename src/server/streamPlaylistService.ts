@@ -2,7 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Track } from '../types.ts';
 import { writeJson } from './atomicStore.ts';
-import type { SpotifyService } from './spotifyService.ts';
+import type { PlaylistSync } from '../playlistSync.ts';
+import { spotifyPlaylistUri } from '../spotifyPlaylist.ts';
+
+export interface PlaylistSpotifyClient {
+  isConnected(): boolean;
+  resolvePlaylistTrack(track: { title: string; artist: string; duration?: number }): Promise<{ state: 'matched' | 'ambiguous' | 'not_found'; uri?: string }>;
+  addToPlaylist(playlist: string, uri: string): Promise<{ success: boolean; alreadyExists?: boolean; error?: string; uncertain?: boolean }>;
+}
 import { logger } from './logger.ts';
 
 export interface StreamPlaylistEntry {
@@ -17,6 +24,8 @@ export interface StreamPlaylistEntry {
   addedBy: string;
   addedAt: number;
   addedToSpotify?: boolean;
+  duration?: number;
+  spotifySync?: PlaylistSync;
 }
 
 export interface AddToPlaylistResult {
@@ -31,6 +40,7 @@ export interface AddToPlaylistResult {
 export class StreamPlaylistService {
   private filePath: string;
   private items: StreamPlaylistEntry[] = [];
+  private storageError = false;
 
   constructor(filePath = path.join(process.cwd(), 'data', 'stream-playlist.json')) {
     this.filePath = filePath;
@@ -38,20 +48,21 @@ export class StreamPlaylistService {
   }
 
   private load() {
-    try {
-      if (fs.existsSync(this.filePath)) {
-        const data = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
-        if (Array.isArray(data)) {
-          this.items = data;
-        }
-      }
-    } catch (err) {
-      logger.log('error', 'STREAM_PLAYLIST', 'Fehler beim Laden der Stream-Playlist', { error: String(err) });
-      this.items = [];
+    for (const candidate of [this.filePath, this.filePath + '.backup']) {
+      if (!fs.existsSync(candidate)) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+        if (!Array.isArray(data) || data.some(item => !item || typeof item.id !== 'string' || typeof item.title !== 'string')) throw new Error('Invalid playlist');
+        if (candidate !== this.filePath) writeJson(this.filePath, data, { strictAtomic: true, preserveBackup: true });
+        this.items = data; return;
+      } catch { /* Never overwrite unreadable source data with an empty playlist. */ }
     }
+    this.storageError = fs.existsSync(this.filePath) || fs.existsSync(this.filePath + '.backup');
+    if (this.storageError) logger.log('error', 'STREAM_PLAYLIST', 'Stream-Playlist und Backup unlesbar; Änderungen sind gesperrt.');
   }
 
   public removeTrack(id: string): boolean {
+    if (this.storageError) throw new Error('Stream-Playlist-Speicher unlesbar.');
     const next = this.items.filter(item => item.id !== id);
     if (next.length === this.items.length) return false;
     writeJson(this.filePath, next, { strictAtomic: true }); this.items = next;
@@ -59,22 +70,23 @@ export class StreamPlaylistService {
   }
 
   private additions: Promise<unknown> = Promise.resolve();
-  public addTrack(track: Track, addedBy: string, spotifyService?: SpotifyService, spotifyPlaylistId?: string): Promise<AddToPlaylistResult> {
+  public addTrack(track: Track, addedBy: string, spotifyService?: PlaylistSpotifyClient, spotifyPlaylistId?: string): Promise<AddToPlaylistResult> {
     const operation = this.additions.then(() => this.addTrackSerial(track, addedBy, spotifyService, spotifyPlaylistId));
     this.additions = operation.catch(() => undefined);
     return operation;
   }
 
   public getItems(): StreamPlaylistEntry[] {
-    return this.items.map(item => ({ ...item }));
+    return structuredClone(this.items);
   }
 
   private async addTrackSerial(
     track: Track,
     addedBy: string,
-    spotifyService?: SpotifyService,
+    spotifyService?: PlaylistSpotifyClient,
     spotifyPlaylistId?: string
   ): Promise<AddToPlaylistResult> {
+    if (this.storageError) return { success: false, error: 'Stream-Playlist-Speicher unlesbar.' };
     if (!track || !track.title) {
       return { success: false, error: 'Kein gültiger Song übergeben.' };
     }
@@ -88,7 +100,7 @@ export class StreamPlaylistService {
     const normalizedArtist = (track.artist || '').trim().toLowerCase();
 
     const existing = this.items.find(item => {
-      if (track.spotifyUri && item.spotifyUri && item.spotifyUri === track.spotifyUri) return true;
+      if ((track.spotifyUri || track.sourceSpotifyUri) && item.spotifyUri === (track.spotifyUri || track.sourceSpotifyUri)) return true;
       if (track.videoId && item.videoId && item.videoId === track.videoId) return true;
       if (item.title.trim().toLowerCase() === normalizedTitle && (item.artist || '').trim().toLowerCase() === normalizedArtist) {
         return true;
@@ -104,66 +116,89 @@ export class StreamPlaylistService {
       };
     }
 
-    let addedToSpotify = false;
-    let spotifyError: string | undefined;
-
-    // If Spotify playlist is configured and track has a Spotify URI (or Spotify service can resolve/add it)
-    if (spotifyService && spotifyPlaylistId) {
-      let uriToAdd = track.spotifyUri;
-      if (!uriToAdd && spotifyService.isConnected()) {
-        try {
-          const query = `${track.title} ${track.artist}`.trim();
-          const match = await spotifyService.searchTrack(query);
-          if (match?.spotifyUri) {
-            uriToAdd = match.spotifyUri;
-          }
-        } catch (e) {
-          // Track not found on Spotify or search failed
-        }
-      }
-
-      if (uriToAdd && spotifyService.isConnected()) {
-        try {
-          const res = await spotifyService.addToPlaylist(spotifyPlaylistId, uriToAdd);
-          addedToSpotify = res.success;
-          if (!res.success && res.error) {
-            spotifyError = res.error;
-          }
-        } catch (e: unknown) {
-          spotifyError = e instanceof Error ? e.message : String(e);
-        }
-      }
-    }
-
     const entry: StreamPlaylistEntry = {
       id: track.id || `spl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       title: track.title,
       artist: track.artist || 'Unknown Artist',
       url: track.url || '',
       videoId: track.videoId,
-      spotifyUri: track.spotifyUri,
+      spotifyUri: track.spotifyUri || track.sourceSpotifyUri,
       playbackProvider: provider,
       albumArtUrl: track.albumArtUrl,
       addedBy,
       addedAt: Date.now(),
-      addedToSpotify
+      addedToSpotify: false,
+      duration: track.duration,
+      spotifySync: { state: 'pending', updatedAt: Date.now() }
     };
 
     const next = [...this.items, entry];
     try { writeJson(this.filePath, next, { strictAtomic: true }); } catch (error) { return { success: false, error: String(error) }; }
     this.items = next;
 
-    logger.log('info', 'STREAM_PLAYLIST', `Song zur Stream-Playlist hinzugefügt: ${entry.title} - ${entry.artist} von @${addedBy}`, {
-      entry,
-      addedToSpotify,
-      spotifyError
-    });
+    await this.syncEntry(entry.id, spotifyService, spotifyPlaylistId);
+    const saved = this.getItems().find(item => item.id === entry.id) || entry;
+    return { success: true, entry: saved, addedToSpotify: saved.addedToSpotify };
+  }
 
-    return {
-      success: true,
-      entry,
-      addedToSpotify,
-      spotifyError
-    };
+  public retrySpotify(id: string, spotify: PlaylistSpotifyClient, playlist?: string, useConfiguredPlaylist = false) {
+    const operation = this.additions.then(() => this.syncEntry(id, spotify, playlist, useConfiguredPlaylist));
+    this.additions = operation.catch(() => undefined);
+    return operation;
+  }
+  private saveSync(id: string, sync: PlaylistSync) {
+    const next = this.items.map(item => item.id === id ? { ...item, spotifySync: structuredClone(sync),
+      addedToSpotify: sync.state === 'added' || sync.state === 'already_present' } : item);
+    writeJson(this.filePath, next, { strictAtomic: true });
+    this.items = next;
+  }
+  private async syncEntry(id: string, spotify?: PlaylistSpotifyClient, configured?: string, useConfiguredPlaylist = false) {
+    const entry = this.items.find(item => item.id === id);
+    if (!entry) throw new Error('Song nicht gefunden.');
+    if ((entry.spotifySync?.retryAfter || 0) > Date.now()) return structuredClone(entry);
+    if (entry.spotifySync?.state === 'added' || entry.spotifySync?.state === 'already_present') return structuredClone(entry);
+    const chosenTarget = useConfiguredPlaylist ? spotifyPlaylistUri(configured || '') : undefined;
+    if (useConfiguredPlaylist && !chosenTarget) throw new Error('Keine gültige Spotify-Ziel-Playlist konfiguriert.');
+    let sync: PlaylistSync = { ...entry.spotifySync, state: 'pending', message: undefined, updatedAt: Date.now() };
+    if (chosenTarget) sync.playlist = chosenTarget;
+    try {
+      try { sync.playlist = spotifyPlaylistUri(sync.playlist || configured || ''); }
+      catch { sync.playlist = ''; }
+      if (!sync.playlist) sync.message = 'Keine gültige Spotify-Stream-Playlist konfiguriert.';
+      else if (!spotify?.isConnected()) sync.message = 'Spotify verbinden; gegebenenfalls erneut anmelden.';
+      else {
+        const known = entry.spotifyUri || (entry.url.match(/^https:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?track\/([A-Za-z0-9]{22})(?:[?/#]|$)/)?.[1] ? `spotify:track:${entry.url.match(/track\/([A-Za-z0-9]{22})/)![1]}` : undefined);
+        sync.uri = sync.uri || known;
+        if (sync.uri && !/^spotify:track:[A-Za-z0-9]{22}$/.test(sync.uri)) sync.uri = undefined;
+        if (!sync.uri) {
+          const match = await spotify.resolvePlaylistTrack(entry);
+          if (match.state !== 'matched' || !match.uri) {
+            sync.state = match.state === 'not_found' ? 'not_found' : 'needs_match';
+          } else sync.uri = match.uri;
+        }
+        if (sync.uri) {
+          // Persist the exact target and track before the external write, including uncertain outcomes.
+          sync.retryAfter = Date.now() + 30000;
+          this.saveSync(id, sync);
+          const result = await spotify.addToPlaylist(sync.playlist, sync.uri);
+          if (result.success || result.uncertain === false) sync.retryAfter = undefined;
+          sync.state = result.success ? result.alreadyExists ? 'already_present' : 'added' : 'failed';
+          const wait = /nach (\d+) Sekunden/.exec(result.error || '');
+          if (wait) sync.retryAfter = Math.max(sync.retryAfter || 0, Date.now() + Number(wait[1]) * 1000);
+          const forbidden = /HTTP (401|403)/.test(result.error || '');
+          const inaccessible = /HTTP 404/.test(result.error || '');
+          sync.message = result.success ? undefined : wait ? `Spotify-Anfragelimit: nach ${wait[1]} Sekunden erneut versuchen.` : inaccessible ? 'Spotify-Playlist nicht gefunden oder nicht zugänglich. Link prüfen und Spotify mit Playlist-Leserechten erneut verbinden.' : forbidden ? 'Spotify erneut verbinden und Schreib-/Leseberechtigung für die eigene Stream-Playlist prüfen.' : 'Spotify nicht erreichbar oder Berechtigung fehlt. Anmeldung und Playlist prüfen; später erneut versuchen.';
+        }
+      }
+    } catch (error) {
+      sync.state = 'failed';
+      const wait = /Erneut in (\d+)s/.exec(error instanceof Error ? error.message : '');
+      if (wait) sync.retryAfter = Math.max(sync.retryAfter || 0, Date.now() + Number(wait[1]) * 1000);
+      sync.message = wait ? `Spotify-Anfragelimit: nach ${wait[1]} Sekunden erneut versuchen.` : 'Spotify-Übertragung nicht bestätigt. Anmeldung und Playlist prüfen; später erneut versuchen.';
+    }
+    sync.updatedAt = Date.now();
+    try { this.saveSync(id, sync); }
+    catch { /* The durable pending entry remains retryable; never claim an unrecorded success. */ }
+    return this.getItems().find(item => item.id === id) || structuredClone(entry);
   }
 }

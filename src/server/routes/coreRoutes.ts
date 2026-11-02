@@ -65,8 +65,27 @@ export function createCoreRoutes(sessionToken: string, appVersion: string, overl
       res.status(404).json({ ok: false });
       return;
     }
-    res.json({ ok: true, options: botService.getActiveOverlay() });
+    const id = req.query.id === undefined ? botService.overlayLibrary.legacyId : req.query.id;
+    if (typeof id !== 'string') { res.status(404).json({ ok: false }); return; }
+    try { res.json({ ok: true, ...botService.overlayLibrary.get(id) }); }
+    catch { res.status(404).json({ ok: false, error: 'Overlay nicht gefunden.' }); }
   });
+
+  router.get('/overlays', (_req, res) => {
+    res.json({ overlays: botService.overlayLibrary.list(), legacyId: botService.overlayLibrary.legacyId });
+  });
+  router.get('/overlays/:id', (req, res) => { res.json(botService.overlayLibrary.get(req.params.id)); });
+  router.post('/overlays', (req, res) => {
+    if (req.body?.sourceId !== undefined && typeof req.body.sourceId !== 'string') throw new BotError('VALIDATION', 'Ungültige Vorlage.', 400);
+    res.status(201).json(botService.overlayLibrary.create(req.body?.name, req.body?.sourceId));
+  });
+  router.put('/overlays/:id', (req, res) => {
+    const item = botService.overlayLibrary.update(req.params.id, req.body?.options);
+    botService.publishOverlay(item.id);
+    res.json(item);
+  });
+  router.patch('/overlays/:id', (req, res) => { res.json(botService.overlayLibrary.rename(req.params.id, req.body?.name)); });
+  router.delete('/overlays/:id', (req, res) => { botService.overlayLibrary.remove(req.params.id); botService.publishOverlay(req.params.id); res.json({ success: true }); });
 
   router.get('/overlay/stats', (_req, res) => {
     res.json({ stats: getStreamStats() });

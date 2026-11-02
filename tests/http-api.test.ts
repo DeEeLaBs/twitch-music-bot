@@ -10,12 +10,12 @@ import { errorPayload } from '../src/server/errors.ts';
 import { botService } from '../src/server/botService.ts';
 import { defaultCountdown } from '../src/countdown.ts';
 
-async function withApi(run: (baseUrl: string, sessionToken: string) => Promise<void>) {
+async function withApi(run: (baseUrl: string, sessionToken: string) => Promise<void>, greetings?: import('../src/server/greetingService.ts').GreetingService) {
   const sessionToken = 'test-session-token';
   const overlayAssetsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ytm-bot-assets-'));
   const app = express();
   app.use(express.json({limit:'2mb'}));
-  app.use('/api', createApiRouter({sessionToken, appVersion:'test', overlayAssetsDir}));
+  app.use('/api', createApiRouter({sessionToken, appVersion:'test', overlayAssetsDir, greetings}));
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const payload = errorPayload(error);
     res.status(payload.status).json(payload.body);
@@ -221,4 +221,93 @@ test('countdown HTTP controls validate inputs, require sessions and never disclo
       assert.doesNotMatch(await fs.readFile(path.join(directory, 'data/secrets.json'), 'utf8'), new RegExp(token));
     });
   } finally { process.chdir(previous); await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+test('multi-overlay API keeps OBS sources independent, validates input and requires a session', async t => {
+  const { OverlayLibrary } = await import('../src/server/overlayLibrary.ts');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'overlays-api-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const library = new OverlayLibrary(path.join(dir, 'overlays.json'), path.join(dir, 'legacy.json'));
+  t.mock.getter(botService, 'overlayLibrary', () => library);
+  t.mock.method(botService, 'overlayTokenMatches', token => token === 'test-overlay-token');
+  await withApi(async (base, sessionToken) => {
+    const request = async (url: string, method = 'GET', body?: unknown, authorized = true) => fetch(`${base}/api${url}`, {
+      method, headers: { 'Content-Type': 'application/json', ...(authorized ? { 'X-Bot-Session': sessionToken } : {}) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    });
+    assert.equal((await request('/overlays', 'POST', { name: 'Blocked' }, false)).status, 403);
+    const first = library.list()[0];
+    const created = await request('/overlays', 'POST', { name: 'Second' });
+    assert.equal(created.status, 201);
+    const second = await created.json();
+    assert.equal((await request(`/overlays/${second.id}`, 'PUT', { options: { ...second.options, accent: '#123456' } })).status, 200);
+    const access = (id?: string) => request(`/overlay/access?token=test-overlay-token${id === undefined ? '' : `&id=${id}`}`);
+    assert.equal((await (await access(second.id)).json()).options.accent, '#123456');
+    assert.notEqual((await (await access(first.id)).json()).options.accent, '#123456');
+    assert.equal((await (await access()).json()).id, first.id);
+    assert.equal((await request(`/overlay/access?token=wrong&id=${second.id}`)).status, 404);
+    assert.equal((await request(`/overlays/${second.id}`, 'PATCH', { name: '' })).status, 400);
+    assert.equal((await request(`/overlays/${second.id}`, 'PUT', { options: { scale: 'bad' } })).status, 400);
+    const renamed = await (await request(`/overlays/${second.id}`, 'PATCH', { name: 'Renamed' })).json();
+    assert.equal(renamed.id, second.id);
+    const copy = await (await request('/overlays', 'POST', { name: 'Copy', sourceId: second.id })).json();
+    assert.notEqual(copy.id, second.id); assert.equal(copy.options.accent, '#123456');
+    assert.equal((await request(`/overlays/${second.id}`, 'DELETE')).status, 200);
+    assert.equal((await access(second.id)).status, 404);
+    assert.equal((await access(copy.id)).status, 200);
+    await request(`/overlays/${first.id}`, 'DELETE');
+    assert.equal((await access()).status, 404);
+    assert.equal((await access(copy.id)).status, 200);
+  });
+});
+
+test('Spotify playlist retry endpoint is session protected and exposes durable results', async t => {
+  const { StreamPlaylistService } = await import('../src/server/streamPlaylistService.ts');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'spotify-retry-api-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const store = new StreamPlaylistService(path.join(dir, 'playlist.json'));
+  const target = 'spotify:playlist:1234567890123456789012';
+  const spotify = { isConnected: () => true, resolvePlaylistTrack: async () => ({state:'not_found' as const}), addToPlaylist: async () => ({success:true, alreadyExists:true}) };
+  t.mock.method(botService, 'getStreamPlaylistService', () => store);
+  t.mock.method(botService, 'getSpotifyService', () => spotify as unknown as ReturnType<typeof botService.getSpotifyService>);
+  t.mock.method(botService, 'getFullState', () => ({config:{streamPlaylistUrl:target}} as ReturnType<typeof botService.getFullState>));
+  await store.addTrack({id:'retry-track', title:'Song', artist:'Artist', spotifyUri:'spotify:track:1234567890123456789012', url:'', duration:100} as import('../src/types.ts').Track, 'Viewer');
+  await withApi(async (base, token) => {
+    assert.equal((await fetch(`${base}/api/stream-playlist/retry-track/retry`, {method:'POST'})).status, 403);
+    assert.equal((await fetch(`${base}/api/stream-playlist/retry-track/retry`, {method:'POST', headers:{'Content-Type':'application/json','X-Bot-Session':token}, body:JSON.stringify({useConfiguredPlaylist:'yes'})})).status, 400);
+    const response = await fetch(`${base}/api/stream-playlist/retry-track/retry`, {method:'POST', headers:{'X-Bot-Session':token}});
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).entry.spotifySync.state, 'already_present');
+    assert.equal((await fetch(`${base}/api/stream-playlist/missing/retry`, {method:'POST', headers:{'X-Bot-Session':token}})).status, 404);
+    assert.equal(new StreamPlaylistService(path.join(dir,'playlist.json')).getItems()[0].addedToSpotify, true);
+  });
+});
+
+test('greeting administration requires sessions; OBS claims require token, selected overlay and visible widget',async t=>{
+ const {GreetingService}=await import('../src/server/greetingService.ts');
+ const {OverlayLibrary}=await import('../src/server/overlayLibrary.ts');
+ const {placeWidget,sceneFromLegacy}=await import('../src/scene.ts');
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'greeting-api-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));
+ let now=Date.now();const greetings=new GreetingService(path.join(dir,'greetings.json'),()=>now);
+ const library=new OverlayLibrary(path.join(dir,'overlays.json'),path.join(dir,'old.json'));const overlay=library.get(library.legacyId);
+ library.update(overlay.id,{...overlay.options,scene:placeWidget(sceneFromLegacy(overlay.options.chat),'greeting')});
+ t.mock.getter(botService,'overlayLibrary',()=>library);t.mock.method(botService,'overlayTokenMatches',value=>value==='test-greeting-token');
+ t.mock.method(botService,'resolveGreetingUser',async()=>({userId:'123',login:'viewer',name:'Viewer'}));
+ await withApi(async(base,session)=>{
+  const post=(url:string,body:unknown,auth=true)=>fetch(`${base}/api${url}`,{method:'POST',headers:{'Content-Type':'application/json',...(auth?{'X-Bot-Session':session}:{})},body:JSON.stringify(body)});
+  assert.equal((await post('/greetings',{},false)).status,403);
+  const gif=await post('/greetings/media',{kind:'gif',dataUrl:'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'});assert.equal(gif.status,200);
+  const gifUrl=(await gif.json()).url;
+  const settings={outputOverlayId:overlay.id,profiles:[{userId:'123',login:'viewer',name:'Viewer',enabled:true,soundEnabled:false,soundUrl:'',volume:50,gifEnabled:true,gifUrl,seconds:5}]};
+  assert.equal((await post('/greetings',settings)).status,200);
+  greetings.setLive({id:'1001',channelId:'99',startedAt:now-1000});greetings.accept({id:'message',userId:'123',channelId:'99',at:now});
+  const claim={token:'test-greeting-token',overlayId:overlay.id,clientId:'browser-one'};
+  assert.equal((await post('/greetings/output',{...claim,token:'bad'},false)).status,404);
+  const first=await post('/greetings/output',claim,false);assert.equal(first.status,200);assert.ok((await first.json()).event);
+  assert.equal((await (await post('/greetings/output',{...claim,clientId:'browser-two'},false)).json()).event,null);
+  const widget=library.get(overlay.id).options;widget.scene!.widgets.find(w=>w.type==='greeting')!.visible=false;library.update(overlay.id,widget);
+  assert.equal((await post('/greetings/output',claim,false)).status,404);
+  assert.equal((await post('/greetings/media',{kind:'gif',dataUrl:'data:image/gif;base64,PGh0bWw+'})).status,400);
+  const snapshot=await (await fetch(`${base}/api/greetings`)).json();assert.equal('seen' in snapshot,false);
+ },greetings);
 });

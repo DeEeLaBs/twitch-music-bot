@@ -1,4 +1,5 @@
 export type BotEventMap = {
+  'greeting:message': import('../greetings.ts').GreetingMessage;
   'playlist:track_added': import('./streamPlaylistService.ts').StreamPlaylistEntry;
   'config:changed': { changedKeys: string[] };
   'queue:changed': { reason: string };

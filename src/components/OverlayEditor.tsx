@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Bell, Copy, Eye, EyeOff, Grid3x3, Image as ImageIcon, ListOrdered, Maximize2, MessageSquare, Music2, Plus, Redo2, Sparkles, Tag, Target, Timer, Trash2, Type, Undo2, Video, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { OverlayAutosave, type AutosaveStatus } from '../overlayAutosave.ts';
+import { OverlayCollection, overlayRequest, type OverlayDocument } from './OverlayCollection.tsx';
 import { OverlayDesignMenu } from './OverlayDesignMenu.tsx';
 import type { PlaybackState } from '../types.ts';
 import { apiFetch } from '../apiClient.ts';
 import { sampleChatLine } from '../overlayChat.ts';
-import { DEFAULT_OVERLAY_OPTIONS, mergeOverlayOptions, type OverlayOptions } from '../overlayOptions.ts';
+import { mergeOverlayOptions, type OverlayOptions } from '../overlayOptions.ts';
 import type { AlertKind } from '../streamAlerts.ts';
 import { SceneStage } from './SceneStage.tsx';
 import { StreamWidgetMenu } from './StreamWidgets.tsx';
@@ -110,6 +113,7 @@ const WIDGET_CHOICES: Array<{ type: SceneWidgetType; de: string; en: string; ico
   { type: 'label', de: 'Label', en: 'Label', icon: Tag },
   { type: 'goal', de: 'Ziel', en: 'Goal', icon: Target },
   { type: 'leaderboard', de: 'Rangliste', en: 'Leaderboard', icon: ListOrdered },
+  { type: 'greeting', de: 'Begrüßungen', en: 'Greetings', icon: Bell },
   { type: 'countdown', de: 'Countdown', en: 'Countdown', icon: Timer },
   { type: 'text', de: 'Text', en: 'Text', icon: Type },
   { type: 'image', de: 'Bilder', en: 'Images', icon: ImageIcon },
@@ -119,7 +123,7 @@ const WIDGET_CHOICES: Array<{ type: SceneWidgetType; de: string; en: string; ico
 
 const WIDGET_GROUPS: Array<{ de: string; en: string; types: SceneWidgetType[] }> = [
   { de: 'Stream', en: 'Stream', types: ['music-player', 'twitch-chat'] },
-  { de: 'Alerts', en: 'Alerts', types: ['alert', 'fx'] },
+  { de: 'Alerts', en: 'Alerts', types: ['alert', 'fx', 'greeting'] },
   { de: 'Ziele', en: 'Goals', types: ['label', 'goal', 'leaderboard', 'countdown'] },
   { de: 'Medien', en: 'Media', types: ['text', 'image', 'video'] }
 ];
@@ -130,14 +134,21 @@ interface OverlayEditorProps {
   embedded?: boolean;
 }
 
-export function OverlayEditor({ playback, language = 'de', embedded = false }: OverlayEditorProps) {
+export function OverlayEditor(props: OverlayEditorProps) {
+  return <OverlayCollection embedded={props.embedded} language={props.language || 'de'}>{(document, onDirty, registerFlush, onSaved, actionHost) => <OverlayCanvasEditor {...props} document={document} onDirty={onDirty} registerFlush={registerFlush} onSaved={onSaved} actionHost={actionHost} />}</OverlayCollection>;
+}
+
+function OverlayCanvasEditor({ playback, language = 'de', embedded = false, document: overlayDocument, onDirty, registerFlush, onSaved, actionHost }: OverlayEditorProps & { document: OverlayDocument; onDirty: (dirty: boolean) => void; registerFlush: (flush: (() => Promise<void>) | null) => void; onSaved: (document: OverlayDocument) => void; actionHost: HTMLDivElement | null }) {
   const ui = (de: string, en: string) => language === 'de' ? de : en;
-  const [options, setOptions] = useState<OverlayOptions>(DEFAULT_OVERLAY_OPTIONS);
-  const [ready, setReady] = useState(false);
+  const [options, setOptions] = useState<OverlayOptions>(() => bindScene(overlayDocument.options, overlayDocument.options.scene ?? sceneFromLegacy(overlayDocument.options.chat)));
+  const [saveState, setSaveState] = useState<AutosaveStatus>({state:'saved',dirty:false});
+  const [autosave] = useState(() => new OverlayAutosave(options, async submitted => {
+    const saved = await overlayRequest(`/api/v1/overlays/${overlayDocument.id}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({options:submitted})});
+    onSaved(saved);
+  }, setSaveState));
   const [token, setToken] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [alertClipId, setAlertClipId] = useState('');
-  const selectedRef = useRef<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [snap, setSnap] = useState(true);
   const emulate = true;
@@ -145,7 +156,7 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [simulateOpen, setSimulateOpen] = useState(false);
   const [creatorOpen, setCreatorOpen] = useState(false);
-  const [customSize, setCustomSize] = useState({ width: '1920', height: '1080' });
+  const [customSize, setCustomSize] = useState(() => ({ width: String(overlayDocument.options.scene?.design.width ?? 1920), height: String(overlayDocument.options.scene?.design.height ?? 1080) }));
   const [notice, setNotice] = useState('');
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -154,6 +165,7 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
   const dragging = useRef(false);
   const armed = useRef(false);
   const gestureScene = useRef('');
+  const editorRoot = useRef<HTMLDivElement>(null);
   const resolutionRef = useRef<HTMLDivElement>(null);
   const simulateRef = useRef<HTMLDivElement>(null);
   const creatorRef = useRef<HTMLDivElement>(null);
@@ -163,38 +175,29 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
   const importedClipId = alertClipId || options.alertBox.creator.clips.find(clip => clip.layers.length)?.id || '';
 
   useEffect(() => {
-    if (!ready) return;
     setSelectedId(current => current ?? optionsRef.current.scene?.widgets.find(widget => widget.type === 'music-player')?.id ?? null);
-  }, [ready]);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      apiFetch('/api/v1/overlay/active').then(response => response.json()).catch(() => null),
-      apiFetch('/api/v1/overlay/token').then(response => response.json()).catch(() => null)
-    ]).then(([active, tokenBody]) => {
-      if (cancelled) return;
-      const merged = mergeOverlayOptions(active?.options);
-      const nextScene = merged.scene ?? sceneFromLegacy(merged.chat);
-      setOptions(bindScene(merged, nextScene));
-      setCustomSize({ width: String(nextScene.design.width), height: String(nextScene.design.height) });
-      if (typeof tokenBody?.token === 'string') setToken(tokenBody.token);
-      setReady(true);
-    });
-    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (!ready || dragging.current) return undefined;
-    const handle = window.setTimeout(() => {
-      void apiFetch('/api/v1/overlay/active', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ options: optionsRef.current })
-      }).catch(() => {});
-    }, 400);
-    return () => window.clearTimeout(handle);
-  }, [options, ready]);
+    let cancelled = false;
+    void overlayRequest('/api/v1/overlay/token').then(body => { if (!cancelled) setToken(body.token); })
+      .catch(reason => { if (!cancelled) setNotice(reason.message); });
+    return () => { cancelled = true; };
+  }, []);
+  const dirty = saveState.dirty;
+  useEffect(() => { autosave.start();registerFlush(() => {autosave.update(optionsRef.current);return autosave.flush();});return () => {registerFlush(null);autosave.stop();}; }, [autosave, registerFlush]);
+  useEffect(() => { autosave.update(options); }, [options, autosave]);
+  useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {if(autosave.dirty){event.preventDefault();event.returnValue='';}};
+    const beforeLeave = (event: Event) => {
+      const detail=(event as CustomEvent<{waitUntil?: (task:Promise<void>)=>void}>).detail;
+      if(detail?.waitUntil){autosave.update(optionsRef.current);detail.waitUntil(autosave.flush());}
+      else if(autosave.dirty)event.preventDefault();
+    };
+    window.addEventListener('beforeunload',warn);window.addEventListener('overlay:before-leave',beforeLeave);
+    return () => {window.removeEventListener('beforeunload',warn);window.removeEventListener('overlay:before-leave',beforeLeave);};
+  }, [autosave]);
 
   const snapshot = () => {
     if (armed.current) return;
@@ -225,6 +228,7 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (editorRoot.current?.closest('[inert]')) return;
       const target = event.target as HTMLElement | null;
       if (target && target.closest('input, textarea, select')) return;
       const key = event.key.toLowerCase();
@@ -310,7 +314,8 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
   };
   const importCreatorAlerts = async () => {
     rememberClip(optionsRef.current.alertBox);
-    const active = await apiFetch('/api/v1/overlay/active').then(response => response.json()).catch(() => null);
+    const active = await apiFetch('/api/v1/overlay/active').then(response => response.ok ? response.json() : null).catch(() => null);
+    if (!active) return;
     const incoming = mergeOverlayOptions(active?.options).alertBox;
     const current = optionsRef.current;
     if (JSON.stringify(current.alertBox.creator) !== JSON.stringify(incoming.creator)) {
@@ -320,8 +325,7 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
   };
   const selectWidget = (id: string | null) => {
     const type = optionsRef.current.scene?.widgets.find(widget => widget.id === id)?.type;
-    if (type === 'alert' && selectedRef.current !== id) void importCreatorAlerts();
-    selectedRef.current = id;
+    if (type === 'alert') rememberClip(optionsRef.current.alertBox);
     setSelectedId(id);
   };
   const addWidget = (type: SceneWidgetType, at?: { x: number; y: number }) => {
@@ -349,7 +353,7 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
     edit(() => bindScene(current, updateWidget(current.scene!, selected.id, { css })), history);
   };
 
-  const browserUrl = useMemo(() => overlayBrowserUrl(window.location.origin, token, scene), [token, scene]);
+  const browserUrl = useMemo(() => overlayBrowserUrl(window.location.origin, token, scene, overlayDocument.id), [token, scene, overlayDocument.id]);
 
   const copyUrl = async () => {
     try {
@@ -384,12 +388,13 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
       onWidgetCss={editWidgetCss}
     />
   ) : selected?.type === 'alert' ? (
+    <div><button type="button" onClick={() => void importCreatorAlerts()}>{ui('Aus Alert-Designer importieren', 'Import from alert designer')}</button>
     <AlertImportList
       clips={options.alertBox.creator.clips.filter(item => item.layers.length).map(item => ({ id: item.id, event: item.event, name: item.name }))}
       activeId={importedClipId}
       language={language}
       onPick={setAlertClipId}
-    />
+    /></div>
   ) : selected ? (
     <StreamWidgetMenu
       widget={selected}
@@ -410,9 +415,11 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
     <p className="canvas-empty">{ui('Wähle eine Ebene, um sie zu bearbeiten.', 'Select a layer to edit it.')}</p>
   );
   return (
-    <div className={`canvas-editor ${embedded ? 'is-embedded' : ''}`}>
+    <div ref={editorRoot} className={`canvas-editor ${embedded ? 'is-embedded' : ''}`}>
       <header className="canvas-topbar">
-        <strong>Overlay</strong>
+        <strong>{overlayDocument.name}</strong>
+        <span className={`overlay-autosave is-${saveState.state}`} role="status"><i aria-hidden="true" />{saveState.state === 'saved' ? ui('Live · gespeichert', 'Live · saved') : saveState.state === 'error' ? ui('Speichern fehlgeschlagen', 'Save failed') : ui('Wird live gespeichert…', 'Saving live…')}</span>
+        {saveState.state === 'error' && <button type="button" onClick={() => void autosave.flush().catch(() => {})}>{ui('Erneut versuchen', 'Retry')}</button>}
         <div className="canvas-resolution" ref={resolutionRef}>
           <button type="button" aria-expanded={resolutionOpen} onClick={() => setResolutionOpen(open => !open)}>
             {scene.design.width}×{scene.design.height}
@@ -432,9 +439,11 @@ export function OverlayEditor({ playback, language = 'de', embedded = false }: O
             </div>
           )}
         </div>
-        <button type="button" className="canvas-copy" onClick={() => void copyUrl()}><Copy aria-hidden="true" />{ui('Starten', 'Launch')}</button>
-        <p className="sr-only" aria-live="polite">{notice}</p>
+        {actionHost && createPortal(<button type="button" className="canvas-copy" disabled={!token} onClick={() => void copyUrl()}><Copy size={16} aria-hidden="true" />{ui('OBS-URL kopieren', 'Copy OBS URL')}</button>, actionHost)}
+        <p className="overlay-save-notice" role="status">{notice}</p>
+      {saveState.state === 'error' && <div className="overlay-autosave-error" role="alert">{/Failed to fetch|NetworkError|Load failed/i.test(saveState.error || '') ? ui('Verbindung zum Bot unterbrochen. Bitte erneut versuchen.', 'Connection to the bot interrupted. Please retry.') : saveState.error} {ui('Deine Änderungen bleiben im Editor erhalten.', 'Your changes remain in the editor.')}</div>}
       </header>
+
       <aside className="canvas-library">
         <h2>{ui('Ebenen', 'Layers')}</h2>
         {scene.widgets.length === 0 && <p className="canvas-note canvas-layer-empty">{ui('Füge ein Widget hinzu, um das Overlay aufzubauen.', 'Add a widget to build the overlay.')}</p>}

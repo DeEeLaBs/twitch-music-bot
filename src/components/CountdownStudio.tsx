@@ -8,7 +8,7 @@ import './CountdownStudio.css';
 import { AlertFontField } from './alert-creator/AlertFontField.tsx';
 import { alertFontFaceCss } from '../alertFonts.ts';
 
-type Snapshot = CountdownState & { serverNow: number; storageError?: string };
+type Snapshot = Omit<CountdownState, 'seen'> & { serverNow: number; storageError?: string };
 type OverlayState = { profile: CountdownProfile; run: CountdownRun; serverNow: number };
 const STATUS = { idle: 'Bereit', running: 'Läuft', paused: 'Pausiert', finished: 'Beendet' };
 const PROVIDERS = { streamelements: 'StreamElements', streamlabs: 'Streamlabs', tipeeestream: 'TipeeeStream' };

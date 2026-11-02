@@ -1,4 +1,7 @@
-import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useState, useRef } from 'react';
+import { useDrawerMorph } from './useDrawerMorph.ts';
+declare const __APP_VERSION__: string;
+import { DesktopWindowChrome } from './components/DesktopWindowChrome.tsx';
+import React, { Suspense, lazy, useCallback, useEffect, useState, useRef } from 'react';
 import { Activity, AlertTriangle, Bell, Headphones, Loader2, MessageSquare, Music2, PanelTopOpen, Settings, Tv, Play, SlidersHorizontal, GripVertical, X } from 'lucide-react';
 import type { BadgeType, BotConfig } from './types.ts';
 import { BOT_QUOTES, getRandomQuoteIndex } from './quotes.ts';
@@ -23,6 +26,7 @@ const DiagnosticsPanel = lazy(() => import('./components/DiagnosticsPanel.tsx').
 const ObsDockStudio = lazy(() => import('./components/ObsDockStudio.tsx').then(m => ({ default: m.ObsDockStudio || m.default })));
 const AlertObsPage = lazy(() => import('./components/AlertObsPage.tsx').then(m => ({ default: m.AlertObsPage })));
 const CountdownStudio = lazy(() => import('./components/CountdownStudio.tsx').then(m => ({ default: m.CountdownStudio })));
+const GreetingStudio = lazy(() => import('./components/GreetingStudio.tsx').then(m => ({ default: m.GreetingStudio })));
 const CountdownOverlayPage = lazy(() => import('./components/CountdownStudio.tsx').then(m => ({ default: m.CountdownOverlayPage })));
 const LazyFallback=()=> <div className="p-6 text-sm text-neutral-400">Loading…</div>;
 
@@ -54,7 +58,7 @@ class TabErrorBoundary extends React.Component<TabErrorBoundaryProps, TabErrorBo
   }
 }
 
-type AppTab = 'player' | 'webPlayer' | 'commands' | 'chat' | 'overlay' | 'alertCreator' | 'obsDock' | 'countdown' | 'diagnostics' | 'settings';
+type AppTab = 'player' | 'webPlayer' | 'commands' | 'chat' | 'overlay' | 'alertCreator' | 'obsDock' | 'countdown' | 'greetings' | 'diagnostics' | 'settings';
 
 const DEFAULT_TAB_ORDER: AppTab[] = [
   'player',
@@ -65,6 +69,7 @@ const DEFAULT_TAB_ORDER: AppTab[] = [
   'alertCreator',
   'obsDock',
   'countdown',
+  'greetings',
   'diagnostics',
   'settings'
 ];
@@ -298,7 +303,7 @@ export default function App() {
   const isObsDockRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/dock/player');
   const isObsRoute = isOverlayRoute || isObsDockRoute || isCountdownRoute;
 
-  const [activeTab, setActiveTab] = useState<AppTab>(() => {
+  const [activeTab, applyActiveTab] = useState<AppTab>(() => {
     if (typeof window === 'undefined') return 'player';
     const req = new URLSearchParams(window.location.search).get('tab');
     if (req === 'blacklist') return 'commands';
@@ -307,6 +312,16 @@ export default function App() {
     if (saved === 'blacklist') return 'commands';
     return saved === 'spotify' ? 'settings' : (saved as AppTab) || 'player';
   });
+
+  const tabNavigation = useRef(0);
+  const setActiveTab = (next: AppTab) => {
+    const navigation = ++tabNavigation.current;
+    const waits: Promise<void>[] = [];
+    const event = new CustomEvent('overlay:before-leave', {cancelable:true,detail:{waitUntil:(task:Promise<void>)=>waits.push(task)}});
+    if (next !== activeTab && !window.dispatchEvent(event)) return;
+    if (waits.length) void Promise.all(waits).then(() => {if(navigation === tabNavigation.current) applyActiveTab(next);}).catch(() => {});
+    else applyActiveTab(next);
+  };
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -591,6 +606,7 @@ export default function App() {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const menuScrimRef = useRef<HTMLDivElement>(null);
+  useDrawerMorph(menuOpen,drawerRef,menuButtonRef,menuScrimRef);
   const [draggedTab, setDraggedTab] = useState<AppTab | null>(null);
   const [dragOverTab, setDragOverTab] = useState<AppTab | null>(null);
   const dragOccurredRef = useRef(false);
@@ -670,6 +686,7 @@ export default function App() {
     alertCreator: { label: language === 'en' ? 'Alert Creator' : 'Alert-Creator', icon: Bell },
     obsDock: { label: language === 'en' ? 'OBS Dock' : 'OBS Dock', icon: PanelTopOpen },
     countdown: { label: 'Countdown', icon: Activity },
+    greetings: { label: language === 'en' ? 'Greetings' : 'Begrüßungen', icon: Bell },
     diagnostics: { label: language === 'en' ? 'Diagnostics' : 'Diagnose', icon: Activity },
     settings: { label: 'Setup', icon: Settings },
   };
@@ -701,104 +718,9 @@ export default function App() {
 
   const closeMenu = () => {
     setMenuOpen(false);
-    window.requestAnimationFrame(() => menuButtonRef.current?.focus());
+    window.requestAnimationFrame(() => menuButtonRef.current?.focus({preventScroll:true}));
   };
 
-  useLayoutEffect(() => {
-    const drawer = drawerRef.current;
-    const button = menuButtonRef.current;
-    const scrim = menuScrimRef.current;
-    if (!drawer || !button) return undefined;
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-    const fade = (edge0: number, edge1: number, value: number) => {
-      const x = clamp01((value - edge0) / (edge1 - edge0 || 1));
-      return x * x * (3 - 2 * x);
-    };
-    const restOpen = () => {
-      drawer.dataset.open = 'true';
-      drawer.dataset.progress = '1';
-      drawer.style.top = '0px';
-      drawer.style.left = '0px';
-      drawer.style.width = 'min(18rem, 85vw)';
-      drawer.style.height = '100%';
-      drawer.style.borderRadius = '0px';
-      drawer.style.visibility = 'visible';
-      drawer.style.pointerEvents = 'auto';
-      drawer.style.setProperty('--drawer-reveal', '1');
-      button.style.opacity = '0';
-      if (scrim) scrim.style.opacity = '';
-    };
-    const restClosed = () => {
-      drawer.dataset.open = 'false';
-      drawer.dataset.progress = '0';
-      drawer.style.visibility = 'hidden';
-      drawer.style.pointerEvents = 'none';
-      drawer.style.setProperty('--drawer-reveal', '0');
-      button.style.opacity = '';
-      if (scrim) scrim.style.opacity = '';
-    };
-    if (reduce) {
-      if (menuOpen) restOpen();
-      else restClosed();
-      return undefined;
-    }
-    if (!menuOpen && drawer.dataset.open !== 'true' && drawer.style.visibility !== 'visible') {
-      restClosed();
-      return undefined;
-    }
-    const origin = button.getBoundingClientRect();
-    const openWidth = Math.min(18 * 16, window.innerWidth * 0.85);
-    const openHeight = window.innerHeight;
-    const apply = (progress: number) => {
-      const widen = clamp01(progress / 0.58);
-      const drop = clamp01((progress - 0.36) / 0.64);
-      const width = origin.width + (openWidth - origin.width) * widen;
-      const squareHeight = origin.height + (openWidth - origin.height) * widen;
-      const height = squareHeight + (openHeight - squareHeight) * drop;
-      const left = origin.left * (1 - widen);
-      const top = origin.top * (1 - widen);
-      const radius = (Math.min(width, height) / 2) * (1 - fade(0.42, 0.9, progress));
-      drawer.style.left = `${left.toFixed(2)}px`;
-      drawer.style.top = `${top.toFixed(2)}px`;
-      drawer.style.width = `${width.toFixed(2)}px`;
-      drawer.style.height = `${height.toFixed(2)}px`;
-      drawer.style.borderRadius = `${radius.toFixed(2)}px`;
-      drawer.style.setProperty('--drawer-reveal', fade(0.46, 0.78, progress).toFixed(3));
-      button.style.opacity = Math.max(0, 1 - progress / 0.2).toFixed(3);
-      if (scrim) scrim.style.opacity = fade(0.08, 0.62, progress).toFixed(3);
-      drawer.dataset.progress = String(progress);
-    };
-    const from = Number(drawer.dataset.progress ?? (menuOpen ? '0' : '1'));
-    const target = menuOpen ? 1 : 0;
-    const distance = target - from;
-    if (Math.abs(distance) < 0.004) {
-      if (menuOpen) restOpen();
-      else restClosed();
-      return undefined;
-    }
-    drawer.dataset.open = 'true';
-    drawer.style.visibility = 'visible';
-    drawer.style.pointerEvents = menuOpen ? 'auto' : 'none';
-    apply(from);
-    const duration = Math.max(220, Math.round((menuOpen ? 740 : 520) * Math.abs(distance)));
-    const start = performance.now();
-    let frame = 0;
-    const tick = (now: number) => {
-      if (drawer.dataset.open === 'false') return;
-      const raw = Math.min(1, (now - start) / duration);
-      const eased = menuOpen ? 1 - (1 - raw) ** 3 : 1 - (1 - raw) ** 2;
-      apply(from + distance * eased);
-      if (raw < 1) {
-        frame = window.requestAnimationFrame(tick);
-        return;
-      }
-      if (menuOpen) restOpen();
-      else restClosed();
-    };
-    frame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(frame);
-  }, [menuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -806,12 +728,13 @@ export default function App() {
       if (event.key === 'Escape') closeMenu();
     };
     window.addEventListener('keydown', onKey);
-    window.requestAnimationFrame(() => document.getElementById(`tab-${activeTab}`)?.focus());
-    return () => window.removeEventListener('keydown', onKey);
+    const focusFrame = window.requestAnimationFrame(() => document.getElementById(`tab-${activeTab}`)?.focus({preventScroll:true}));
+    return () => { window.cancelAnimationFrame(focusFrame); window.removeEventListener('keydown', onKey); };
   }, [menuOpen]);
 
   return (
-    <div className="bg-neutral-950 text-neutral-100 h-screen w-screen flex flex-col antialiased font-sans overflow-hidden relative">
+    <div className={`app-window-root${menuOpen ? ' is-menu-open' : ''} bg-neutral-950 text-neutral-100 h-screen w-screen flex flex-col antialiased font-sans overflow-hidden relative`}>
+      <DesktopWindowChrome integratedHeader={['overlay','alertCreator','obsDock'].includes(activeTab)} />
       
       {(loading || !state) && (
         <div className="absolute inset-0 bg-neutral-950/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center gap-3" role="status" aria-live="polite">
@@ -821,9 +744,8 @@ export default function App() {
       )}
 
       {/* Fixed Header & Nav Section */}
-      <div ref={menuScrimRef} className={`fixed inset-0 z-40 bg-black/55 ${menuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`} onClick={closeMenu} aria-hidden="true" />
-          <aside
-            ref={drawerRef}
+      <div ref={menuScrimRef} className={`menu-scrim fixed inset-0 z-40 bg-black/55 ${menuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`} onClick={closeMenu} aria-hidden="true" />
+          <aside ref={drawerRef}
             id="app-nav-drawer"
             className={`fixed z-50 bg-neutral-900 border border-neutral-800 shadow-2xl flex flex-col ${menuOpen ? 'is-open' : ''}`}
             aria-hidden={!menuOpen}
@@ -979,7 +901,7 @@ export default function App() {
           {Boolean(activeNoticeText && (connectionLost || activeNoticeText !== dismissedNotice)) && (
             <div
               role="status"
-              className="mx-3 mt-2 bg-amber-950/40 border border-amber-500/30 text-amber-200 p-3 rounded-xl text-xs flex items-center justify-between gap-2.5 transition-opacity duration-200 shadow-sm"
+              className="app-window-notice mx-3 mt-2 bg-amber-950/40 border border-amber-500/30 text-amber-200 p-3 rounded-xl text-xs flex items-center justify-between gap-2.5 transition-opacity duration-200 shadow-sm"
               onMouseEnter={() => setIsNoticePaused(true)}
               onMouseLeave={() => setIsNoticePaused(false)}
             >
@@ -1001,7 +923,7 @@ export default function App() {
             </div>
           )}
 
-        <main id="main-content" className={`flex-1 min-h-0 flex flex-col ${activeTab === 'overlay' || activeTab === 'alertCreator' || activeTab === 'obsDock' ? 'is-overlay-tab overflow-hidden' : 'overflow-y-auto px-4 pb-4 pt-20 space-y-6'}`} tabIndex={-1}>
+        <main id="main-content" className={`flex-1 min-h-0 flex flex-col ${activeTab === 'overlay' || activeTab === 'alertCreator' || activeTab === 'obsDock' ? 'is-overlay-tab overflow-hidden' : activeTab === 'greetings' ? 'overflow-y-auto px-4 pb-4 pt-2 mt-[72px] space-y-6' : 'overflow-y-auto px-4 pb-4 pt-20 space-y-6'}`} tabIndex={-1}>
             {webplayers}
             
             {(!loading && state) && (
@@ -1068,6 +990,8 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'greetings' && <div id="panel-greetings" role="tabpanel" aria-labelledby="tab-greetings"><Suspense fallback={<LazyFallback/>}><GreetingStudio /></Suspense></div>}
+
           {activeTab === 'chat' && (
             <div id="panel-chat" role="tabpanel" aria-labelledby="tab-chat"><ChatSimulator logs={state?.logs} onSendMessage={handleSimulateChat} language={state?.config.language} /></div>
           )}
@@ -1126,7 +1050,7 @@ export default function App() {
                 : (state?.config?.language === 'de' ? 'Dashboard im Browser. Bitte das Hauptprogramm (Electron) nicht schließen! Es fehlen noch Verbindungen.' : 'Dashboard in Browser. Do not close the main program! Missing connections.')}
             </span>
           </div>
-          <div className="text-neutral-500 font-mono">v1.8.5 • Electron Edition</div>
+          <div className="text-neutral-500 font-mono">v{__APP_VERSION__} • Electron Edition</div>
         </footer>
       )}
           </div>

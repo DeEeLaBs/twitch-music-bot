@@ -399,7 +399,7 @@ test('ConfigService preserves empty command permissions to allow disabling comma
   const events: string[] = [];
   const off = botEvents.on('playlist:track_added', entry => events.push(entry.title));
   const destinations: string[] = [];
-  Object.assign(queue.spotifyService, {isConnected: () => true, addToPlaylist: async (playlist: string) => {destinations.push(playlist); return {success:true};}});
+  Object.assign(queue.spotifyService, {isConnected: () => true, resolvePlaylistTrack: async () => ({state:'matched', uri:'spotify:track:4cOdK2wGLETKBW3PvgPWqT'}), addToPlaylist: async (playlist: string) => {destinations.push(playlist); return {success:true};}});
   bot.updateConfig({streamPlaylistUrl:'spotify:playlist:37i9dQZF1DXcBWIGoYBM5M', spotifyFallbackPlaylist:'spotify:playlist:0000000000000000000000'});
   try {
     await bot.processCommandOrChat(mod, '!playlist');
@@ -591,4 +591,30 @@ test('the requests-open switch is accepted by the config validator and only as a
   const { validateConfig } = await import('../src/server/validation.ts');
   assert.deepEqual(validateConfig({ songRequestsOpen: false }), { songRequestsOpen: false });
   assert.throws(() => validateConfig({ songRequestsOpen: 'no' }));
+});
+
+test('playlist chat feedback explains an unconfigured target for new and duplicate local entries', async () => {
+ const {bot,messages}=harness();
+ await bot.processCommandOrChat(mod,'!playlist');
+ await bot.processCommandOrChat(mod,'!playlist');
+ assert.match(messages[0],/Keine gültige Spotify-Stream-Playlist konfiguriert/);
+ assert.match(messages[1],/Keine gültige Spotify-Stream-Playlist konfiguriert/);
+});
+
+test('chat and dashboard share cross-service resolution; an ambiguous match never reaches the queue',async t=>{
+ const {BotService}=await import('../src/server/botService.ts');
+ const {bot,queue}=harness('spotify');
+ const metadata={videoId:'abcdefghijk',title:'Song',artist:'Daft Punk',duration:180,thumbnailUrl:'',url:'https://music.youtube.com/watch?v=abcdefghijk'};
+ t.mock.method(YouTubeResolver,'resolve',async()=>metadata);
+ let ambiguous=false;const submitted:any[]=[];
+ Object.assign(queue.spotifyService,{matchTrack:async()=>{if(ambiguous)throw new Error('Kein eindeutiger Spotify-Treffer');return {...metadata,videoId:'spotify-'+'A'.repeat(22),spotifyUri:'spotify:track:'+'A'.repeat(22),url:'https://open.spotify.com/track/'+'A'.repeat(22)};}});
+ t.mock.method(queue,'addSong',(resolved:any)=>{submitted.push(resolved);return {success:true,position:1};});
+ const service=Object.assign(Object.create(BotService.prototype),{config:(bot as any).config,spotifyService:queue.spotifyService,queueManager:queue});
+ await bot.processCommandOrChat(mod,'!sr https://youtu.be/abcdefghijk');
+ await service.requestSongManually('https://youtu.be/abcdefghijk');
+ assert.equal(submitted.length,2);assert.deepEqual(submitted[0],submitted[1]);
+ ambiguous=true;
+ await bot.processCommandOrChat(mod,'!sr https://youtu.be/abcdefghijk');
+ await assert.rejects(service.requestSongManually('https://youtu.be/abcdefghijk'),/eindeutig/);
+ assert.equal(submitted.length,2);
 });

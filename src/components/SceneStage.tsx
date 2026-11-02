@@ -1,3 +1,4 @@
+import { GreetingWidget } from './GreetingWidget.tsx';
 import React, { useRef } from 'react';
 import type { PlaybackState } from '../types.ts';
 import type { OverlayOptions } from '../overlayOptions.ts';
@@ -29,6 +30,7 @@ interface SceneStageProps {
   playback?: PlaybackState;
   language?: 'de' | 'en';
   token?: string;
+  outputOverlayId?: string;
   preview?: boolean;
   muted?: boolean;
   interactive?: boolean;
@@ -43,7 +45,7 @@ interface SceneStageProps {
 }
 
 export function SceneStage({
-  scene, options, playback, language = 'de', token = '', preview = false, muted = false, interactive = false, snap = true, zoom = 1,
+  scene, options, playback, language = 'de', token = '', outputOverlayId = '', preview = false, muted = false, interactive = false, snap = true, zoom = 1,
   selectedId = null, alertClipId = '', onSelect, onGestureStart, onGesture, onPlace
 }: SceneStageProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -170,6 +172,7 @@ export function SceneStage({
                 <OverlayChat options={{ ...options.chat, enabled: true }} token={token} preview={preview} fill />
               )}
               {widget.type === 'alert' && <AlertWidget alert={feed.alert} config={options.alertBox} language={language} interactive={interactive} muted={muted} clipId={interactive && selectedId === widget.id ? alertClipId : ''} />}
+              {widget.type === 'greeting' && <GreetingWidget token={token} overlayId={outputOverlayId} preview={preview || interactive} />}
               {widget.type === 'label' && <LabelWidget stats={feed.stats} variant={widget.variant} language={language} />}
               {widget.type === 'goal' && <GoalWidget stats={feed.stats} variant={widget.variant} alert={feed.alert} preview={preview || interactive} />}
               {widget.type === 'leaderboard' && <LeaderboardWidget stats={feed.stats} variant={widget.variant} />}

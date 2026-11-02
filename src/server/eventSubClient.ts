@@ -69,7 +69,10 @@ export class EventSubClient {
       this.open(session.reconnect_url, auth, false);
     } else if (type === 'notification') {
       const bonus = countdownBonusFromNotification(message);
-      if (bonus) this.onBonus(bonus);
+      if (bonus) {
+        try { this.onBonus(bonus); }
+        catch { this.log('Countdown-Ereignis konnte nicht verarbeitet oder gespeichert werden.'); }
+      }
       const alert = alertFromNotification(message);
       if (alert) this.onAlert(alert);
     } else if (type === 'session_keepalive') {

@@ -27,12 +27,20 @@ window.addEventListener('DOMContentLoaded', () => {
   if (typeof document?.addEventListener === 'function') {
     document.addEventListener('click', (event) => {
       try {
+        // Spotify's own click handler and the host's skip endpoint must not
+        // both advance playback. Synthetic player-control clicks are already
+        // commands and must never be reflected back to the host.
+        if (window.location.hostname !== 'open.spotify.com' || !event.isTrusted) return;
         const target = event.target;
         if (!target || typeof target.closest !== 'function') return;
         const button = target.closest('button, [role="button"]');
-        if (!button) return;
-        const skipBtn = button.closest('[data-testid="control-button-skip-forward"], button[aria-label*="Next" i], button[aria-label*="Weiter" i], button[aria-label*="Skip" i]');
+        if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+        const skipBtn = button.matches('[data-testid="control-button-skip-forward"]') ||
+          (button.closest('[data-testid="now-playing-bar"], footer') &&
+            ['next','next track','skip to next','weiter','nächster titel','nächster song'].includes((button.getAttribute('aria-label') || '').trim().toLowerCase()));
         if (skipBtn) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
           ipcRenderer.sendToHost('player-user-skip');
         }
       } catch {}

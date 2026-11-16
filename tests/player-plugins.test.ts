@@ -529,7 +529,7 @@ test('previousTrack delegates to active plugin when playback source is autoplay_
   assert.equal(queueManager.getHistory().length, 1);
 });
 
-test('skipCurrent discards unconfirmed queue track when explicitly skipped and falls through to player skip', async () => {
+test('skipCurrent preserves the next request when its player rejects the start', async () => {
   const ytm = new MockPlayerPlugin('youtube_music', 'YTM', 'YTM Player', 'https://music.youtube.com');
   ytm.acceptPlay = false;
   const registry = new PlayerPluginRegistry([ytm]);
@@ -551,11 +551,10 @@ test('skipCurrent discards unconfirmed queue track when explicitly skipped and f
   await new Promise(r => setTimeout(r, 20));
   assert.equal(queueManager.getQueue().length, 1);
 
-  // Explicit skipCurrent should attempt next, fail, discard the broken track and call ytm.skip()
   const result = await queueManager.skipCurrent('streamer');
-  assert.equal(result.success, true);
-  assert.equal(queueManager.getQueue().length, 0);
-  assert.equal(ytm.skipCalls, 1);
+  assert.equal(result.success, false);
+  assert.equal(queueManager.getQueue()[0].videoId, 'broken1');
+  assert.equal(ytm.skipCalls, 0);
 });
 
 test('skipCurrent keeps a request whose start was not confirmed', async () => {
@@ -607,4 +606,34 @@ test('addSong rejects a Spotify track already playing from an external context',
   }, { username: 'viewer1', displayName: 'Viewer One', badge: 'viewer' });
   assert.equal(result.success, false);
   assert.equal(queueManager.getQueue().length, 0);
+});
+
+test('repeated requests for one Spotify URI create only one queue entry despite resolver ID differences', () => {
+  const companion = { subscribe: () => () => {}, getIsConnected: () => true, getIsSimulation: () => true } as any;
+  const manager = new QueueManager({ ...baseConfig, playbackProvider: 'spotify' }, companion, undefined, new PlayerPluginRegistry());
+  // Keep the queue idle while testing additions, without starting any real player.
+  (manager as any).playbackError = 'Playback unavailable';
+  const requester = { username: 'streamer', displayName: 'Streamer', badge: 'broadcaster' as const };
+  const song = { title: "Somebody's Watching Me", artist: 'Rockwell', duration: 220, thumbnailUrl: '', url: 'https://open.spotify.com/track/6A4Jc8npNo79BOgsrPptLA', spotifyUri: 'spotify:track:6A4Jc8npNo79BOgsrPptLA', requestSource: 'spotify' as const };
+  assert.equal(manager.addSong({ ...song, videoId: 'spotify-first' }, requester).success, true);
+  assert.equal(manager.addSong({ ...song, videoId: 'spotify-second' }, requester).success, false);
+  assert.equal(manager.addSong({ ...song, videoId: 'spotify-third' }, requester).success, false);
+  assert.equal(manager.getQueue().length, 1);
+});
+
+test('Spotify confirmation failure retains the request and never skips the player', async () => {
+  const plugin = new MockPlayerPlugin('spotify', 'Spotify', 'Spotify', 'https://open.spotify.com');
+  plugin.playTrack = async () => ({ success: false, error: 'Spotify-Songstart wurde innerhalb des Zeitlimits nicht bestätigt.' });
+  const spotify = { subscribe: () => () => {}, isReadyForPlayback: () => true, getSnapshot: () => ({}), getLastError: () => '' } as any;
+  const companion = { subscribe: () => () => {}, pause: async () => true } as any;
+  const manager = new QueueManager({ ...baseConfig, playbackProvider: 'spotify' }, companion, spotify, new PlayerPluginRegistry([plugin]));
+  (manager as any).playbackError = 'Idle';
+  const track = makeTrack('bloody-mary', 'spotify');
+  track.spotifyUri = 'spotify:track:11BKm0j4eYoCPPpCONAVwA';
+  assert.equal(manager.addSong(track, track.requester).success, true);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    assert.equal((await manager.skipCurrent('streamer')).success, false);
+    assert.equal(manager.getQueue().length, 1);
+  }
+  assert.equal(plugin.skipCalls, 0);
 });

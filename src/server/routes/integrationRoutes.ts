@@ -1,5 +1,7 @@
+import { nectarBridge } from '../nectarBridge.ts';
 import { Router } from 'express';
 import path from 'path';
+import fs from 'node:fs';
 import { botService } from '../botService.ts';
 import { asyncRoute, messageFromUnknown } from '../http.ts';
 import { BotError } from '../errors.ts';
@@ -64,5 +66,60 @@ export function createIntegrationRoutes(){
       });
     });
   }
+    // NectarLink Integration Bridge
+  router.post('/nectar/state', (req, res) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BotError('VALIDATION', 'Ungültiger Wiedergabestatus.', 400);
+    for (const key of ['title', 'artist', 'album', 'albumArtUrl', 'url', 'playerApp']) {
+      if (body[key] !== undefined && (typeof body[key] !== 'string' || body[key].length > (key === 'albumArtUrl' ? 2_000_000 : 4096))) throw new BotError('VALIDATION', 'Ungültiges Feld: ' + key, 400);
+    }
+    for (const key of ['progressSeconds', 'durationSeconds']) {
+      if (body[key] !== undefined && (typeof body[key] !== 'number' || !Number.isFinite(body[key]) || body[key] < 0)) throw new BotError('VALIDATION', 'Ungültiges Feld: ' + key, 400);
+    }
+    if (body.isPlaying !== undefined && typeof body.isPlaying !== 'boolean') throw new BotError('VALIDATION', 'Ungültiger Wiedergabestatus.', 400);
+    const updated = nectarBridge.updateState(req.body || {});
+    res.json({ success: true, state: updated });
+  });
+  router.get('/nectar/state', (_req, res) => {
+    res.json({ success: true, connected: nectarBridge.getIsConnected(), state: nectarBridge.getState() });
+  });
+  router.post('/nectar/command', asyncRoute(async (req, res) => {
+    const action = req.body?.action;
+    if (!['play', 'pause', 'play_pause', 'next', 'previous', 'volume'].includes(action)) throw new BotError('VALIDATION', 'Ungültige Aktion.', 400);
+    const ok = await nectarBridge.sendCommand(action, req.body?.volume);
+    res.json({ success: ok });
+  }));
+  router.get('/nectar/cover', (_req, res) => {
+    const artDir = path.join(process.env.LOCALAPPDATA || '', 'Nectarlink', 'cache', 'art');
+    if (!fs.existsSync(artDir)) {
+      res.status(404).send('Not found');
+      return;
+    }
+    try {
+      const files = fs.readdirSync(artDir)
+        .filter(f => f.endsWith('.jpg') || f.endsWith('.png'))
+        .map(f => {
+          const full = path.join(artDir, f);
+          return { full, time: fs.statSync(full).mtimeMs };
+        })
+        .sort((a, b) => b.time - a.time);
+
+      if (!files.length) {
+        res.status(404).send('No artwork cached');
+        return;
+      }
+
+      const newest = files[0].full;
+      res.setHeader('Content-Type', newest.endsWith('.png') ? 'image/png' : 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=60');
+      res.sendFile(newest);
+    } catch {
+      res.status(500).send('Error reading cover');
+    }
+  });
+  router.get('/nectar/poll-commands', (_req, res) => {
+    res.json({ commands: nectarBridge.popPendingCommands() });
+  });
+
   return router;
 }

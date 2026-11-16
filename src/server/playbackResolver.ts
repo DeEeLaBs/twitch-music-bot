@@ -29,7 +29,7 @@ export async function resolveForPlaybackProvider(
       const matched=await spotifyService.matchTrack(source);
       return {...matched,requestSource:'youtube',originalRequestUrl:input,sourceVideoId:videoId,sourceTitle:source.title,sourceArtist:source.artist,sourceChannel:source.channel};
     }
-    const result=await spotifyService.searchTrack(spotifyId?`spotify:track:${spotifyId}`:input) as ResolvedTrackInfo;
+    const result=await spotifyService.searchTrack(spotifyId?`spotify:track:${spotifyId}`:input);
     return {...result,...(spotifyId?{requestSource:'spotify' as const,originalRequestUrl:input}:{})};
   } catch(error) {
     if(error instanceof ResolverError)throw error;

@@ -5,6 +5,21 @@ import { validateConfig } from '../src/server/validation.ts';
 import { QueueManager } from '../src/server/queueManager.ts';
 import { SpotifyService } from '../src/server/spotifyService.ts';
 
+test('simultaneous Spotify requests share one lookup and a failed lookup can be retried', async () => {
+  const service = new SpotifyService('test-client');
+  let calls = 0;
+  (service as any).api = async () => {
+    calls++;
+    return calls === 1 ? new Response(null, {status: 503}) : Response.json({id: 'A'.repeat(22), name: 'Song', duration_ms: 120000});
+  };
+  const query = 'spotify:track:' + 'A'.repeat(22);
+  const first = await Promise.allSettled([service.searchTrack(query), service.searchTrack(query)]);
+  assert.deepEqual(first.map(result => result.status), ['rejected', 'rejected']);
+  assert.equal(calls, 1);
+  assert.equal((await service.searchTrack(query)).title, 'Song');
+  assert.equal(calls, 2);
+});
+
 test('playlist playback sends a context to the selected Spotify device and rejects API errors', async () => {
   const service: any = Object.create(SpotifyService.prototype);
   service.isReadyForPlayback = () => true;
@@ -167,6 +182,37 @@ test('Spotify continuation prioritizes requests, prevents duplicate starts and r
   assert.equal(manager.spotifyContinuationPending, false);
 });
 
+test('Spotify confirms alternate catalog IDs only for the same playing recording', async () => {
+  const service = Object.create(SpotifyService.prototype) as any;
+  const requested = 'spotify:track:18DaSMSqc40nV8cDhdLemj';
+  const playing = 'spotify:track:39PWLJrvfBCrfe4NX9aGZD';
+  service.poll = async () => {};
+  service.lastSnapshot = { trackUri: playing, connected: true, isPlaying: true };
+  let alternateCode = 'USSM10400645';
+  service.api = async (path: string) => Response.json({ external_ids: { isrc: path.endsWith(playing.slice(-22)) ? alternateCode : 'USSM10400645' } });
+  assert.equal(await service.waitForUri(requested, 100), true);
+  alternateCode = 'DIFFERENT';
+  assert.equal(await service.waitForUri(requested, 100), false);
+});
+
+test('Spotify polling ignores older playback events after a confirmed title change', async () => {
+  const service = new SpotifyService('test-client', 'test-device');
+  (service as any).refreshToken = 'test-refresh';
+  (service as any).profile = { product: 'premium' };
+  let timestamp = 2000;
+  let uri = 'spotify:track:new';
+  (service as any).api = async () => new Response(JSON.stringify({ timestamp, is_playing: true, progress_ms: 1000, item: { id: uri.split(':').pop(), uri, name: uri, duration_ms: 200000, artists: [] } }));
+  try {
+    await service.poll();
+    timestamp = 1000; uri = 'spotify:track:old';
+    await service.poll();
+    assert.equal(service.getSnapshot().trackUri, 'spotify:track:new');
+    timestamp = 3000; uri = 'spotify:track:intentional-next';
+    await service.poll();
+    assert.equal(service.getSnapshot().trackUri, 'spotify:track:intentional-next');
+  } finally { service.stop(); }
+});
+
 test('SpotifyService next triggers adaptive poll burst and updates track rapidly', async () => {
   const service = new SpotifyService('test-client-id', 'test-device');
   (service as any).refreshToken = 'fake-refresh-token';
@@ -283,7 +329,7 @@ test('SpotifyService targetDeviceId remembers last active device when playback m
   assert.equal(await (service as any).targetDeviceId(), 'web-player-id');
 });
 
-test('Spotify listener triggers fallback playlist continuation when track stops with no URI even mid-song', async () => {
+for (const reportedUri of [undefined, 'spotify:track:other']) test('interrupted Spotify request stays queued on ' + (reportedUri || 'empty status'), () => {
   const manager: any = Object.create(QueueManager.prototype);
   manager.config = { playbackProvider: 'spotify' };
   manager.currentTrack = { id: 'request', playbackProvider: 'spotify', spotifyUri: 'spotify:track:mid', duration: 240 };
@@ -293,11 +339,16 @@ test('Spotify listener triggers fallback playlist continuation when track stops 
   manager.archiveCurrent = () => { manager.currentTrack = null; };
   manager.continueSpotifyAfterRequest = async () => { continued++; };
   manager.notify = () => {};
+  manager.queue = [];
+  let saved = 0;
+  manager.saveQueue = () => { saved++; };
   manager.initSpotifySubscription();
 
   // Spotify returns empty / no trackUri mid-song (e.g. 204 No Content after user skipped)
-  listener({ connected: true, isPlaying: false, trackUri: undefined, progressSeconds: 0, durationSeconds: 0 });
-  assert.equal(continued, 1);
+  listener({ connected: true, isPlaying: Boolean(reportedUri), trackUri: reportedUri, progressSeconds: 0, durationSeconds: 0 });
+  assert.equal(continued, 0);
+  assert.deepEqual(manager.queue.map((track: {id:string}) => track.id), ['request']);
+  assert.equal(saved, 1);
 });
 
 test('continueSpotifyAfterRequest preserves incoming external track and does not wipe it', async () => {

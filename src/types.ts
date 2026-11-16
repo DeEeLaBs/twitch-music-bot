@@ -31,7 +31,7 @@ export interface Track {
   sourceArtist?: string;
   sourceChannel?: string;
   spotifyUri?: string;
-  playbackProvider?: 'youtube_music' | 'spotify';
+  playbackProvider?: 'youtube_music' | 'spotify' | 'nectar';
 }
 
 export interface PlaybackState {
@@ -81,6 +81,8 @@ export interface BotConfig {
   maxActivePerViewer: number; // default 2
   voteSkipThreshold: number; // default 3
   autoPlayRadio: boolean; // default true
+  nectarBridgeEnabled?: boolean;
+  nectarPauseOnRequest?: boolean;
   /** false = viewers cannot request songs (broadcaster and moderators still can). Absent/true = open. */
   songRequestsOpen?: boolean;
   spotifyFallbackPlaylist?: string;

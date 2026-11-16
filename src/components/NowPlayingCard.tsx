@@ -29,7 +29,8 @@ const NowPlayingCardComponent: React.FC<NowPlayingCardProps> = ({
   const t = useTranslations(language);
   const song = playback.currentSong;
   const isPlaying = playback.isPlaying;
-  const isSpotify = song?.playbackProvider === 'spotify';
+  const isNectar = Boolean(song?.id?.startsWith('nectar-'));
+  const isSpotify = !isNectar && song?.playbackProvider === 'spotify';
   const durationSec = Math.max(0, playback.durationSeconds || song?.duration || 0);
   const fallbackCover = song?.videoId ? `https://img.youtube.com/vi/${song.videoId}/hqdefault.jpg` : '';
   const rawCoverUrl = song?.albumArtUrl?.trim() || fallbackCover;
@@ -110,7 +111,7 @@ const NowPlayingCardComponent: React.FC<NowPlayingCardProps> = ({
   useEffect(() => {
     // Spotify sends track identity and position in the same confirmed snapshot.
     // Its new-track position must not be discarded by the YouTube transition guard.
-    if (isSpotify || !isPlaying) {
+    if (isSpotify || isNectar || !isPlaying) {
       lastSongKeyRef.current = songKey;
       setSmoothProgress(playback.progressSeconds);
       return;
@@ -135,7 +136,7 @@ const NowPlayingCardComponent: React.FC<NowPlayingCardProps> = ({
       }
       return prev;
     });
-  }, [playback.progressSeconds, songKey, isPlaying, isSpotify]);
+  }, [playback.progressSeconds, songKey, isPlaying, isSpotify, isNectar]);
 
   // Interpolate between server samples using elapsed time, including delayed ticks.
   useEffect(() => {
@@ -189,7 +190,9 @@ const NowPlayingCardComponent: React.FC<NowPlayingCardProps> = ({
             {playback.status === 'loading' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping mr-0.5" />}
             {playback.status === 'loading'
               ? (language === 'de' ? 'Nächster Titel…' : 'Skipping…')
-              : (language === 'de' ? 'Direkte Wiedergabe' : 'Direct playback')}
+              : (isNectar
+                  ? (language === 'de' ? 'Smartphone (NectarLink)' : 'Phone (NectarLink)')
+                  : (language === 'de' ? 'Direkte Wiedergabe' : 'Direct playback'))}
           </span>
         ) : song ? (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-500/10 text-purple-300 border border-purple-500/20">
@@ -248,7 +251,7 @@ const NowPlayingCardComponent: React.FC<NowPlayingCardProps> = ({
                 </p>
               </div>
               <div className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                {song.playbackProvider === 'spotify' ? 'Spotify' : 'YouTube Music'}
+                {isNectar ? 'NectarLink' : (song.playbackProvider === 'spotify' ? 'Spotify' : 'YouTube Music')}
               </div>
 
               {/* Progress Bar */}

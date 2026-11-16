@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { ListMusic, Trash2, Plus, Loader2, ArrowUp, ArrowDown } from 'lucide-react';
 import type { BadgeType, Track } from '../types.ts';
 import { useTranslations } from '../translations.ts';
+import { artworkUrl } from '../artworkUrl.ts';
 
 interface QueueListProps {
   language?: 'de' | 'en';
@@ -22,14 +23,16 @@ const QueueListComponent: React.FC<QueueListProps> = ({
 }) => {
   const [query, setQuery] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitPending = useRef(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const t = useTranslations(language);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!query.trim()) return;
+    if (!query.trim() || submitPending.current) return;
 
+    submitPending.current = true;
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
@@ -42,6 +45,7 @@ const QueueListComponent: React.FC<QueueListProps> = ({
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : t('requestFailed'));
     } finally {
+      submitPending.current = false;
       setIsSubmitting(false);
     }
   };
@@ -103,6 +107,7 @@ const QueueListComponent: React.FC<QueueListProps> = ({
       >
         <input
           id="input-song-query"
+          disabled={isSubmitting}
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -141,32 +146,36 @@ const QueueListComponent: React.FC<QueueListProps> = ({
             {language === 'de' ? 'Die Warteschlange ist leer.' : 'The queue is empty.'}
           </div>
         ) : (
-          queue.map((track, index) => (
-            <div
-              key={track.id}
-              draggable
-              onDragStart={() => setDragId(track.id)}
-              onDragEnd={() => setDragId(null)}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (dragId && dragId !== track.id) onMove(dragId, index);
-              }}
-              className="flex items-center justify-between p-3 rounded-xl bg-neutral-950/60 hover:bg-neutral-800/80 border border-neutral-800/80 transition-all group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <span className="w-5 text-center text-xs font-mono font-bold text-neutral-500">
-                  #{index + 1}
-                </span>
-                <img
-                  src={track.albumArtUrl || (track.videoId ? `https://img.youtube.com/vi/${track.videoId}/hqdefault.jpg` : 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=120&q=80')}
-                  alt=""
-                  className="w-10 h-10 rounded-lg object-cover bg-neutral-900 border border-neutral-700/60 shrink-0"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).src =
-                      'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=120&q=80';
-                  }}
-                />
+          queue.map((track, index) => {
+            const rawCover = track.albumArtUrl || (track.videoId ? `https://img.youtube.com/vi/${track.videoId}/hqdefault.jpg` : '');
+            const cover = artworkUrl(rawCover);
+            return (
+              <div
+                key={track.id}
+                draggable
+                onDragStart={() => setDragId(track.id)}
+                onDragEnd={() => setDragId(null)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragId && dragId !== track.id) onMove(dragId, index);
+                }}
+                className="flex items-center justify-between p-3 rounded-xl bg-neutral-950/60 hover:bg-neutral-800/80 border border-neutral-800/80 transition-all group"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="w-5 text-center text-xs font-mono font-bold text-neutral-500">
+                    #{index + 1}
+                  </span>
+                  <img
+                    src={cover || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=120&q=80'}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    className="w-10 h-10 rounded-lg object-cover bg-neutral-900 border border-neutral-700/60 shrink-0"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src =
+                        'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=120&q=80';
+                    }}
+                  />
                 <div className="min-w-0">
                   <div
                     className="text-xs font-semibold text-neutral-200 truncate group-hover:text-white"
@@ -221,7 +230,8 @@ const QueueListComponent: React.FC<QueueListProps> = ({
                 </button>
               </div>
             </div>
-          ))
+          );
+        })
         )}
       </div>
     </div>

@@ -25,12 +25,12 @@ async function main() {
   const portable = path.join(output, 'Portable');
   fs.mkdirSync(portable, { recursive: true });
   const { build: viteBuild } = await import('vite');
-  await viteBuild({ root, build: { outDir: path.join(portable, 'dist'), emptyOutDir: false } });
+  await viteBuild({ root, define: { __LOCAL_RESTART__: 'false' }, build: { outDir: path.join(portable, 'dist'), emptyOutDir: false } });
   const plugins = [{ name: 'optional-console-colors', setup(builder) {
     builder.onResolve({ filter: /^supports-color$/ }, () => ({ path: 'supports-color', namespace: 'optional' }));
     builder.onLoad({ filter: /.*/, namespace: 'optional' }, () => ({ contents: 'module.exports = false;' }));
   } }];
-  const defines = { 'process.env.NODE_ENV': '"production"', 'process.env.WS_NO_BUFFER_UTIL': '"1"', 'process.env.WS_NO_UTF_8_VALIDATE': '"1"' };
+  const defines = { __MUSICBOT_RELEASE__: 'true', 'process.env.NODE_ENV': '"production"', 'process.env.WS_NO_BUFFER_UTIL': '"1"', 'process.env.WS_NO_UTF_8_VALIDATE': '"1"' };
   const results = [];
   results.push(await build({ absWorkingDir: root, entryPoints: ['server.ts'], bundle: true, platform: 'node', format: 'cjs', target: 'node22', outfile: path.join(portable, 'dist/server.cjs'), metafile: true, define: defines, plugins }));
   // Optional: ship the Stream Deck plugin so the Setup page can install it with one click.

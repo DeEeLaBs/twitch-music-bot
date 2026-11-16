@@ -2,12 +2,12 @@ import type { BadgeType } from './types.ts';
 
 export const CHAT_ROLE_FILTERS = ['all', 'subscriber', 'vip', 'moderator'] as const;
 export type ChatRoleFilter = (typeof CHAT_ROLE_FILTERS)[number];
-export const CHAT_STYLES = ['classic', 'bubbles', 'stacked', 'inline', 'messenger', 'nametag', 'terminal', 'bevel', 'handheld', 'arcade', 'y2k', 'receipt', 'neon', 'vapor', 'hud', 'gothic', 'gem', 'brutal', 'comic', 'note', 'sakura'] as const;
+export const CHAT_STYLES = ['classic', 'bubbles', 'stacked', 'inline', 'messenger', 'nametag', 'terminal', 'bevel', 'handheld', 'arcade', 'y2k', 'receipt', 'neon', 'vapor', 'hud', 'gothic', 'gem', 'brutal', 'comic', 'note', 'sakura', 'ashen'] as const;
 export type ChatStyle = (typeof CHAT_STYLES)[number];
-export const CHAT_MOTIONS = ['none', 'fade', 'slide', 'rise', 'scale', 'blur', 'wipe', 'drop', 'pop', 'shutter', 'tilt', 'squash', 'flash'] as const;
+export const CHAT_MOTIONS = ['none', 'fade', 'slide', 'rise', 'scale', 'blur', 'wipe', 'drop', 'pop', 'shutter', 'tilt', 'squash', 'flash', 'ember'] as const;
 export type ChatMotion = (typeof CHAT_MOTIONS)[number];
 export const BASIC_CHAT_MOTIONS = ['none', 'fade', 'slide'] as const satisfies readonly ChatMotion[];
-export const CREATIVE_CHAT_MOTIONS = ['rise', 'scale', 'blur', 'wipe', 'drop', 'pop', 'shutter', 'tilt', 'squash', 'flash'] as const satisfies readonly ChatMotion[];
+export const CREATIVE_CHAT_MOTIONS = ['rise', 'scale', 'blur', 'wipe', 'drop', 'pop', 'shutter', 'tilt', 'squash', 'flash', 'ember'] as const satisfies readonly ChatMotion[];
 
 export interface ChatBadge {
   set: string;
@@ -269,12 +269,18 @@ export function visibleChatLines(lines: readonly OverlayChatLine[], options: Ove
   return chatPresence(lines, new Set(), options, now).visible;
 }
 
+/** Ember has a slower exit so the ash finishes before the line is removed. */
+export function chatMotionDuration(motion:ChatMotion, fadeMs:number, direction:'in'|'out'='in'):number {
+  if (motion === 'none' || fadeMs <= 0) return 0;
+  return motion === 'ember' ? Math.round(fadeMs * (direction === 'out' ? 900 : 800) / 180) : fadeMs;
+}
+
 export function chatPresence(lines: readonly OverlayChatLine[], previouslyShown: ReadonlySet<string>, options: OverlayChatOptions, now: number): { visible: OverlayChatLine[]; leaving: OverlayChatLine[] } {
   const fresh = options.lifetimeSeconds > 0 ? lines.filter(line => now - line.ts <= options.lifetimeSeconds * 1000) : lines;
   const visible = fresh.slice(-options.maxLines);
   const visibleIds = new Set(visible.map(line => line.id));
   const exitMotion = options.exitMotion || options.motion;
-  const animateOut = exitMotion !== 'none' && options.fadeMs > 0 && options.lifetimeSeconds > 0;
+  const animateOut = chatMotionDuration(exitMotion, options.fadeMs, 'out') > 0 && options.lifetimeSeconds > 0;
   const leaving = animateOut
     ? lines.filter(line => !visibleIds.has(line.id) && previouslyShown.has(line.id) && now - line.ts > options.lifetimeSeconds * 1000)
     : [];

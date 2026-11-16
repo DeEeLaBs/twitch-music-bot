@@ -4,8 +4,8 @@
   "private": true,
   "main": "main.cjs",
   "scripts": {
-    "check": "node --check main.cjs && node --check windowChrome.cjs && node --check preload.cjs && node --check playerPreload.cjs && node --check drm.cjs && node --check check-drm.cjs",
-    "test": "node --test providers.test.cjs drm.test.cjs googleAuth.test.cjs playerExecution.test.cjs youtubeMetadata.test.cjs windowChrome.test.cjs",
+    "check": "node --check main.cjs && node --check localRestart.cjs && node --check windowChrome.cjs && node --check preload.cjs && node --check playerPreload.cjs && node --check drm.cjs && node --check check-drm.cjs",
+    "test": "node --test providers.test.cjs drm.test.cjs googleAuth.test.cjs playerExecution.test.cjs youtubeMetadata.test.cjs windowChrome.test.cjs localRestart.test.cjs",
     "check:drm": "electron check-drm.cjs",
     "start": "electron ."
   },

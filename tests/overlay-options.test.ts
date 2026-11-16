@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createOverlaySearch, DEFAULT_OVERLAY_OPTIONS, OVERLAY_POP_ANIMATIONS, OVERLAY_POP_POSITIONS, OVERLAY_POP_STYLES, parseOverlayOptions, QUEUE_POP_PRESETS, recommendedOverlaySize } from '../src/overlayOptions.ts';
+import { createOverlaySearch, DEFAULT_OVERLAY_OPTIONS, mergeOverlayOptions, OVERLAY_POP_ANIMATIONS, OVERLAY_POP_POSITIONS, OVERLAY_POP_STYLES, parseOverlayOptions, QUEUE_POP_PRESETS, recommendedOverlaySize } from '../src/overlayOptions.ts';
+
+test('cover size is independent of layout dimensions, persists and safely defaults for old overlays', () => {
+  const options = mergeOverlayOptions({artworkScale:150});
+  assert.equal(parseOverlayOptions(new URLSearchParams(createOverlaySearch(options))).artworkScale,150);
+  assert.equal(parseOverlayOptions(new URLSearchParams()).artworkScale,100);
+  assert.equal(mergeOverlayOptions({artworkScale:NaN}).artworkScale,100);
+  assert.equal(mergeOverlayOptions({artworkScale:999}).artworkScale,200);
+  assert.equal(mergeOverlayOptions({artworkScale:0}).artworkScale,50);
+  assert.equal(options.scale,DEFAULT_OVERLAY_OPTIONS.scale);
+  assert.equal(options.scene,undefined);
+});
 
 test('overlay options survive URL round-trip', () => {
   const expected = { ...DEFAULT_OVERLAY_OPTIONS, theme: 'ocean' as const, layout: 'stacked' as const, showArtwork: false, accent: '#00ffaa', scale: 125, radius: 8, freePositioning: true, showRequesterAvatar: true, showRequesterBadge: false, backgroundImageUrl: '/overlay-assets/bg.png', logoImageUrl: '/overlay-assets/logo.png', showLogo: true, logoSize: 72, customCss: '#obs-now-playing-banner{opacity:.9}', positions: { ...DEFAULT_OVERLAY_OPTIONS.positions, artwork: { x: 22, y: 44 } } };
@@ -84,4 +95,9 @@ test('every popup preset uses valid values, has both languages, and one slides u
     for (const text of [preset.name, preset.hint]) assert.ok(text.de && text.en && text.de !== text.en, preset.id);
   }
   assert.ok(QUEUE_POP_PRESETS.some(preset => preset.values.queuePopAnimation === 'slideUp' && preset.values.queuePopPosition === 'bottom'));
+});
+test('playback status defaults visible for older overlays and its toggle survives storage links',()=>{
+ assert.equal(parseOverlayOptions(new URLSearchParams()).showPlaybackStatus,true);
+ const options={...DEFAULT_OVERLAY_OPTIONS,showPlaybackStatus:false};
+ assert.equal(parseOverlayOptions(new URLSearchParams(createOverlaySearch(options))).showPlaybackStatus,false);
 });

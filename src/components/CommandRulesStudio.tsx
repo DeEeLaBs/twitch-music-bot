@@ -79,6 +79,9 @@ const COMMAND_METADATA: Record<CommandName, {
   descEn: string;
   icon: typeof MessageSquare;
 }> = {
+  game: {category:'moderation',descDe:'Starten: !quiz, !zahlenraten, !wortraten oder !abenteuer. Auswerten: !game finish. Abbrechen: !game cancel. Optional: !game start quiz|zahlen|wort|abenteuer.',descEn:'Start: !quiz, !zahlenraten, !wortraten or !abenteuer. Finish: !game finish. Cancel: !game cancel.',icon:MessageSquare},
+  play: {category:'general',descDe:'An der laufenden Spielrunde teilnehmen: !play <Antwort>.',descEn:'Join the active game: !play <answer>.',icon:MessageSquare},
+  points: {category:'general',descDe:'Eigene Spielpunkte; !points top zeigt die Rangliste.',descEn:'Your game points; !points top shows the leaderboard.',icon:MessageSquare},
   timer: { category: 'moderation', descDe: 'Countdown: Streamstart und Subathon starten, pausieren, fortsetzen oder Zeit ändern.', descEn: 'Countdown: Start, pause, resume or adjust streamstart and subathon timers.', icon: Clock },
   streamplaylist: { category: 'moderation', descDe: 'Aktuellen Song speichern; !playlist link zeigt den Link.', descEn: 'Save current track; !playlist link shows the link.', icon: ListMusic },
   wrongsong: { category: 'playback', descDe: 'Eigenen letzten Songwunsch innerhalb von 60 Sekunden zurückziehen.', descEn: 'Withdraw your latest pending request within 60 seconds.', icon: ListMusic },

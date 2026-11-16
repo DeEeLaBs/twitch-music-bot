@@ -1,3 +1,4 @@
+import {ChatFire} from './ChatFire.tsx';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChatBadgeRow } from './ChatBadges.tsx';
 import type { BadgeType } from '../types.ts';
@@ -7,6 +8,7 @@ import {
   applyChatClear,
   badgesForRole,
   chatPresence,
+  chatMotionDuration,
   fitChatLines,
   pushChatLine,
   sampleChatLine,
@@ -48,6 +50,7 @@ export function OverlayChat({ options, token = '', preview = false, contained = 
   const logRef = useRef<HTMLDivElement>(null);
   const [lines, setLines] = useState<OverlayChatLine[]>([]);
   const [exits, setExits] = useState<OverlayChatLine[]>([]);
+  const [motionPreview,setMotionPreview] = useState<{id:string;direction:'in'|'out'}|null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
 
   const publish = () => {
@@ -66,7 +69,7 @@ export function OverlayChat({ options, token = '', preview = false, contained = 
     const liveIds = new Set(next.map(line => line.id));
     const exits = exitsRef.current;
     for (const line of presence.leaving) {
-      if (!exits.has(line.id)) exits.set(line.id, { line, until: now + current.fadeMs });
+      if (!exits.has(line.id)) exits.set(line.id, { line, until: now + chatMotionDuration(current.exitMotion || current.motion, current.fadeMs, 'out') });
     }
     let soonest = 0;
     for (const [id, exit] of exits) {
@@ -167,16 +170,34 @@ export function OverlayChat({ options, token = '', preview = false, contained = 
     const observer = new ResizeObserver(fit);
     observer.observe(log);
     return () => observer.disconnect();
-  }, [lines, exits, options.fontSize, options.style, options.showBadges, options.showReplies, options.showTimestamps, preview]);
+  }, [lines, exits, options.fontSize, options.style, options.showBadges, options.showReplies, options.showTimestamps, preview, motionPreview]);
+
+  useEffect(() => {
+    if (!preview) return;
+    let timer = 0;
+    let sequence = 0;
+    const show = (event:Event) => {
+      const direction = (event as CustomEvent).detail?.direction;
+      if (direction !== 'in' && direction !== 'out') return;
+      const current = optionsRef.current;
+      const duration = chatMotionDuration(direction === 'in' ? current.motion : current.exitMotion, current.fadeMs, direction);
+      window.clearTimeout(timer);
+      setMotionPreview({id:`motion-preview-${++sequence}`,direction});
+      timer = window.setTimeout(()=>setMotionPreview(null),Math.max(duration,120)+80);
+    };
+    window.addEventListener('overlay:chat-motion-preview',show);
+    return () => {window.removeEventListener('overlay:chat-motion-preview',show);window.clearTimeout(timer);};
+  }, [preview]);
 
   if (!options.enabled) return null;
   const live = lines.length || exits.length ? lines : preview ? PREVIEW_LINES : [];
   const emoteNames = live === PREVIEW_LINES ? { ...SAMPLE_EMOTES, ...names } : names;
   const shown = [
     ...exits.filter(line => !live.some(item => item.id === line.id)).map(line => ({ line, out: true })),
-    ...live.map(line => ({ line, out: false }))
+    ...live.map(line => ({ line, out: false })),
+    ...(preview && motionPreview ? [{line:sampleChatLine({id:motionPreview.id,displayName:'Ashen',text:motionPreview.direction === 'in' ? 'Aus der Glut erscheint eine neue Nachricht.' : 'Die Nachricht vergeht zu Glut und Asche.'}),out:motionPreview.direction === 'out'}] : [])
   ];
-  const background = options.showBackground ? `rgba(${hexToRgb(options.background)},${options.opacity / 100})` : undefined;
+  const background = options.style !== 'ashen' && options.showBackground ? `rgba(${hexToRgb(options.background)},${options.opacity / 100})` : undefined;
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!draggable || !onMove) return;
@@ -212,10 +233,13 @@ export function OverlayChat({ options, token = '', preview = false, contained = 
         width: fill ? '100%' : `${options.width}%`,
         height: fill ? '100%' : `${options.height}%`,
         fontSize: `${options.fontSize}px`,
-        fontFamily: options.fontFamily || undefined,
+        fontFamily: options.fontFamily || (options.style === 'ashen' ? '"Times New Roman", Georgia, serif' : undefined),
         color: options.messageColor,
         background,
-        ['--chat-fade' as string]: `${options.fadeMs}ms`
+        ['--chat-fade' as string]: `${options.fadeMs}ms`,
+        ['--chat-ember-in' as string]: `${chatMotionDuration('ember',options.fadeMs,'in')}ms`,
+        ['--chat-ember-out' as string]: `${chatMotionDuration('ember',options.fadeMs,'out')}ms`,
+        ['--chat-plate-opacity' as string]: options.opacity / 100
       }}
       onPointerDown={onPointerDown}
       role="log"
@@ -241,11 +265,15 @@ export function OverlayChat({ options, token = '', preview = false, contained = 
           {cheered && <span className="overlay-chat-bits">{line.bits}</span>}
           <span className="overlay-chat-name" style={{ color: nametag ? tagInk(nameColor) : nameColor }}>{line.displayName}</span>
         </>;
-        return (
-          <p key={line.id} className={`overlay-chat-line ${out ? 'is-out' : ''} ${line.first ? 'is-first' : ''} ${cheered ? 'is-cheer' : ''}`} style={nametag ? { ['--tag' as string]: nameColor } : undefined}>
-            {nametag ? <><span className="overlay-chat-tag">{identity}</span><span className="overlay-chat-body">{reply}{text}</span></> : <>{reply}{identity}{text}</>}
-          </p>
-        );
+        const ember=(out ? options.exitMotion : options.motion) === 'ember' && options.fadeMs > 0;
+        const classes=`overlay-chat-line ${out ? 'is-out' : ''} ${line.first ? 'is-first' : ''} ${cheered ? 'is-cheer' : ''}`;
+        const content=nametag ? <><span className="overlay-chat-tag">{identity}</span><span className="overlay-chat-body">{reply}{text}</span></> : <>{reply}{identity}{text}</>;
+        const tagStyle=nametag ? {['--tag' as string]:nameColor} : undefined;
+        if(ember)return <div key={line.id} className={`${classes} chat-fire-slot`} style={tagStyle}>
+          <p className={`${classes} chat-message-surface ${shown[shown.length-1].line.id===line.id?'is-latest':''}`}>{content}</p>
+          <span className="chat-embers" aria-hidden="true"><ChatFire direction={out?'out':'in'} duration={chatMotionDuration('ember',options.fadeMs,out?'out':'in')} seed={line.id}/></span>
+        </div>;
+        return <p key={line.id} className={classes} style={tagStyle}>{content}</p>;
       })}
       </div>
     </div>

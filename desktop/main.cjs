@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, session } = require('electron');
+const { app, BrowserWindow, shell, session, ipcMain } = require('electron');
 const {mainWindowChrome}=require('./windowChrome.cjs');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -38,6 +38,17 @@ process.on('unhandledRejection', err => {
 });
 
 let win;
+let localRestart;
+if (typeof __MUSICBOT_RELEASE__ === 'undefined' || !__MUSICBOT_RELEASE__) {
+  localRestart = require('./localRestart.cjs').installLocalRestart({
+    app, ipcMain, getWindow: () => win,
+    launchFlag: process.env.MUSICBOT_LOCAL_LAUNCHER,
+    relaunchOptions: process.env.MUSICBOT_LOCAL_NODE && /^\d+$/.test(process.env.MUSICBOT_LOCAL_LAUNCHER_PID || '') ? {
+      execPath: process.env.MUSICBOT_LOCAL_NODE,
+      args: [path.resolve(__dirname, '../scripts/desktop.cjs'), `--wait-for-launcher=${process.env.MUSICBOT_LOCAL_LAUNCHER_PID}`]
+    } : undefined
+  });
+}
 let googleAuthTask = null;
 let googleAuthStatus = { state: 'idle', message: '', browser: '', updatedAt: Date.now() };
 const webviewMetrics = new Map();
@@ -214,6 +225,7 @@ if (!isPrimaryInstance) {
     });
 
     win.setMenuBarVisibility(false);
+    localRestart?.attachWindow(win);
 
     win.webContents.on('will-attach-webview', (_event, preferences) => {
       preferences.preload = path.join(__dirname, 'playerPreload.cjs');

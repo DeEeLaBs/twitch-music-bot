@@ -1,3 +1,5 @@
+import {GamesWidget} from './GamesWidget.tsx';
+import {WheelWidget} from './WheelWidget.tsx';
 import { GreetingWidget } from './GreetingWidget.tsx';
 import React, { useRef } from 'react';
 import type { PlaybackState } from '../types.ts';
@@ -38,6 +40,7 @@ interface SceneStageProps {
   zoom?: number;
   selectedId?: string | null;
   alertClipId?: string;
+  playerPreviewKey?: number;
   onSelect?: (id: string | null) => void;
   onGestureStart?: () => void;
   onGesture?: (id: string, frame: SceneFrame, phase: 'move' | 'up') => void;
@@ -46,7 +49,7 @@ interface SceneStageProps {
 
 export function SceneStage({
   scene, options, playback, language = 'de', token = '', outputOverlayId = '', preview = false, muted = false, interactive = false, snap = true, zoom = 1,
-  selectedId = null, alertClipId = '', onSelect, onGestureStart, onGesture, onPlace
+  selectedId = null, alertClipId = '', playerPreviewKey = 0, onSelect, onGestureStart, onGesture, onPlace
 }: SceneStageProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const feed = useStreamFeed(token, preview, alert => planAlert(options.alertBox, alert, language).totalMs);
@@ -158,6 +161,7 @@ export function SceneStage({
                 height: widget.frame.height,
                 zIndex: widget.frame.z,
                 ['--np-title' as string]: `${widget.fontSize}px`,
+                ['--player-font-scale' as string]: widget.fontSize / 18,
                 ['--np-artist' as string]: `${Math.max(11, Math.round(widget.fontSize * 0.72))}px`,
                 ['--scene-fade' as string]: `${widget.fadeMs}ms`,
                 fontFamily: widget.fontFamily || undefined
@@ -166,12 +170,14 @@ export function SceneStage({
             >
               {widget.css && <style>{widget.css}</style>}
               {widget.type === 'music-player' && (
-                <OverlayWidget playback={playback} options={{ ...options, freePositioning: false }} language={language} disableInternalWs fitFrame />
+                <OverlayWidget key={interactive ? playerPreviewKey : undefined} playback={playback} options={{ ...options, freePositioning: false }} language={language} disableInternalWs fitFrame />
               )}
               {widget.type === 'twitch-chat' && (
                 <OverlayChat options={{ ...options.chat, enabled: true }} token={token} preview={preview} fill />
               )}
               {widget.type === 'alert' && <AlertWidget alert={feed.alert} config={options.alertBox} language={language} interactive={interactive} muted={muted} clipId={interactive && selectedId === widget.id ? alertClipId : ''} />}
+              {widget.type === 'games' && <GamesWidget token={token} overlayId={outputOverlayId} preview={preview || interactive} />}
+              {widget.type === 'wheel' && <WheelWidget token={token} overlayId={outputOverlayId} preview={preview || interactive} />}
               {widget.type === 'greeting' && <GreetingWidget token={token} overlayId={outputOverlayId} preview={preview || interactive} />}
               {widget.type === 'label' && <LabelWidget stats={feed.stats} variant={widget.variant} language={language} />}
               {widget.type === 'goal' && <GoalWidget stats={feed.stats} variant={widget.variant} alert={feed.alert} preview={preview || interactive} />}

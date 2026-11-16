@@ -1,8 +1,11 @@
+import {restoreAppTab, saveAppTab, type AppTab} from './appNavigation.ts';
+import { LocalRestartButton } from './components/LocalRestartButton.tsx';
 import { useDrawerMorph } from './useDrawerMorph.ts';
 declare const __APP_VERSION__: string;
+declare const __LOCAL_RESTART__: boolean;
 import { DesktopWindowChrome } from './components/DesktopWindowChrome.tsx';
 import React, { Suspense, lazy, useCallback, useEffect, useState, useRef } from 'react';
-import { Activity, AlertTriangle, Bell, Headphones, Loader2, MessageSquare, Music2, PanelTopOpen, Settings, Tv, Play, SlidersHorizontal, GripVertical, X } from 'lucide-react';
+import { Disc3, Activity, AlertTriangle, Bell, Headphones, Loader2, MessageSquare, Music2, PanelTopOpen, Settings, Tv, Play, SlidersHorizontal, GripVertical, X } from 'lucide-react';
 import type { BadgeType, BotConfig } from './types.ts';
 import { BOT_QUOTES, getRandomQuoteIndex } from './quotes.ts';
 import { NowPlayingCard } from './components/NowPlayingCard.tsx';
@@ -26,6 +29,8 @@ const DiagnosticsPanel = lazy(() => import('./components/DiagnosticsPanel.tsx').
 const ObsDockStudio = lazy(() => import('./components/ObsDockStudio.tsx').then(m => ({ default: m.ObsDockStudio || m.default })));
 const AlertObsPage = lazy(() => import('./components/AlertObsPage.tsx').then(m => ({ default: m.AlertObsPage })));
 const CountdownStudio = lazy(() => import('./components/CountdownStudio.tsx').then(m => ({ default: m.CountdownStudio })));
+const GamesStudio = lazy(() => import('./components/GamesStudio.tsx').then(m => ({ default: m.GamesStudio })));
+const WheelStudio = lazy(() => import('./components/WheelStudio.tsx').then(m => ({ default: m.WheelStudio })));
 const GreetingStudio = lazy(() => import('./components/GreetingStudio.tsx').then(m => ({ default: m.GreetingStudio })));
 const CountdownOverlayPage = lazy(() => import('./components/CountdownStudio.tsx').then(m => ({ default: m.CountdownOverlayPage })));
 const LazyFallback=()=> <div className="p-6 text-sm text-neutral-400">Loading…</div>;
@@ -58,7 +63,6 @@ class TabErrorBoundary extends React.Component<TabErrorBoundaryProps, TabErrorBo
   }
 }
 
-type AppTab = 'player' | 'webPlayer' | 'commands' | 'chat' | 'overlay' | 'alertCreator' | 'obsDock' | 'countdown' | 'greetings' | 'diagnostics' | 'settings';
 
 const DEFAULT_TAB_ORDER: AppTab[] = [
   'player',
@@ -70,6 +74,8 @@ const DEFAULT_TAB_ORDER: AppTab[] = [
   'obsDock',
   'countdown',
   'greetings',
+  'wheel',
+  'games',
   'diagnostics',
   'settings'
 ];
@@ -140,6 +146,8 @@ const WebviewContainer = ({
     let disposed = false;
     let navigationFailed = false;
     let documentFinished = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retried = false;
     let readyFrame = 0;
     const cancelReadyFrame = () => cancelAnimationFrame(readyFrame);
     interface WebviewNavigationEvent extends Event {
@@ -161,6 +169,7 @@ const WebviewContainer = ({
       // Only a new main document needs an opaque loader. SPA navigation and
       // background resource loading must keep the existing player visible.
       if (!navEvent.isMainFrame || navEvent.isInPlace) return;
+      clearTimeout(retryTimer);
       cancelReadyFrame();
       navigationFailed = false;
       documentFinished = false;
@@ -192,6 +201,18 @@ const WebviewContainer = ({
       setLoadError(failEvent?.errorDescription || 'Web Player konnte nicht geladen werden.');
     };
     wv.addEventListener('did-start-navigation', handleNavigation);
+    const handleHttpResponse = (event: Event) => {
+      const { url, httpResponseCode } = event as Event & { url: string; httpResponseCode: number };
+      if (!url?.startsWith('https://open.spotify.com/')) return;
+      if (httpResponseCode >= 200 && httpResponseCode < 400) retried = false;
+      if (!(httpResponseCode >= 500 && httpResponseCode < 600)) return;
+      handleLoadFailure({ errorDescription: `Spotify ist vorübergehend nicht erreichbar (HTTP ${httpResponseCode}).` });
+      if (!retried) {
+        retried = true;
+        retryTimer = setTimeout(() => { if (!disposed && navigationFailed) wv.reloadIgnoringCache(); }, 3000);
+      }
+    };
+    wv.addEventListener('did-navigate', handleHttpResponse);
     const handleContentReady = (event: Event) => {
       const ipcEvent = event as WebviewIpcMessageEvent;
       if (ipcEvent.channel === 'player-content-ready') handleLoadReady();
@@ -230,10 +251,13 @@ const WebviewContainer = ({
     
     return () => {
       disposed = true;
+      clearTimeout(retryTimer);
       cancelReadyFrame();
       if (onReloadRef) onReloadRef.current = null;
       try {
         wv.removeEventListener('did-start-navigation', handleNavigation);
+        wv.removeEventListener('did-navigate', handleHttpResponse);
+        wv.removeEventListener('did-finish-load', handleLoadReady);
         wv.removeEventListener('ipc-message', handleContentReady);
         wv.removeEventListener('did-fail-load', handleLoadFailure);
         wv.remove();
@@ -286,6 +310,7 @@ const WebviewContainer = ({
           <div className="flex flex-col items-center gap-3 text-sm">
             {loading ? <Loader2 className="w-7 h-7 animate-spin text-purple-400" /> : <AlertTriangle className="w-7 h-7 text-amber-400" />}
             <span>{loading ? 'Web Player wird geladen…' : loadError}</span>
+            {loadError && !loading && <button type="button" className="rounded-lg bg-purple-600 px-4 py-2 text-white" onClick={() => wvRef.current?.reloadIgnoringCache()}>{english ? 'Reload player' : 'Player neu laden'}</button>}
           </div>
         </div>
       )}
@@ -305,12 +330,10 @@ export default function App() {
 
   const [activeTab, applyActiveTab] = useState<AppTab>(() => {
     if (typeof window === 'undefined') return 'player';
-    const req = new URLSearchParams(window.location.search).get('tab');
-    if (req === 'blacklist') return 'commands';
-    if (req) return req === 'spotify' ? 'settings' : (req as AppTab);
-    const saved = sessionStorage.getItem('musicbot_activeTab');
-    if (saved === 'blacklist') return 'commands';
-    return saved === 'spotify' ? 'settings' : (saved as AppTab) || 'player';
+    let persistent: Storage | undefined; let legacySession: Storage | undefined;
+    try { persistent = window.localStorage; } catch {}
+    try { legacySession = window.sessionStorage; } catch {}
+    return restoreAppTab(window.location.search, persistent, legacySession);
   });
 
   const tabNavigation = useRef(0);
@@ -324,10 +347,13 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('musicbot_activeTab', activeTab);
+    if (typeof window !== 'undefined' && routePath === '/') {
+      let persistent: Storage | undefined; let legacySession: Storage | undefined;
+      try { persistent = window.localStorage; } catch {}
+      try { legacySession = window.sessionStorage; } catch {}
+      saveAppTab(activeTab, persistent, legacySession);
     }
-  }, [activeTab]);
+  }, [activeTab, routePath]);
 
   const { state, loading, connectionLost, initialError } = useBotState();
   const [error, setError] = useState<string | null>(null);
@@ -366,7 +392,15 @@ export default function App() {
   if (isObsDockRoute) {
     return (
       <div className="obs-dock-route">
-        <ObsPlayerDock playback={state?.playback} queue={state?.queue || []} language={(state?.config.language as 'de' | 'en') || 'en'} options={dockOptions} connectionLost={connectionLost} player={state?.config?.playbackProvider === 'spotify' ? 'spotify' : 'youtube_music'} playerConnected={state?.config?.playbackProvider === 'spotify' ? Boolean(state?.config?.spotifyConnected) : Boolean(state?.config?.companionConnected)} />
+        <ObsPlayerDock
+          playback={state?.playback}
+          queue={state?.queue || []}
+          language={(state?.config.language as 'de' | 'en') || 'en'}
+          options={dockOptions}
+          connectionLost={connectionLost}
+          player={state?.playback?.currentSong?.id?.startsWith('nectar-') ? 'nectar' : (state?.config?.playbackProvider === 'spotify' ? 'spotify' : 'youtube_music')}
+          playerConnected={state?.playback?.currentSong?.id?.startsWith('nectar-') ? true : (state?.config?.playbackProvider === 'spotify' ? Boolean(state?.config?.spotifyConnected) : Boolean(state?.config?.companionConnected))}
+        />
       </div>
     );
   }
@@ -686,6 +720,8 @@ export default function App() {
     alertCreator: { label: language === 'en' ? 'Alert Creator' : 'Alert-Creator', icon: Bell },
     obsDock: { label: language === 'en' ? 'OBS Dock' : 'OBS Dock', icon: PanelTopOpen },
     countdown: { label: 'Countdown', icon: Activity },
+    games: {label: language === 'en' ? 'Chat Games' : 'Chat-Spiele', icon: Disc3},
+    wheel: {label: language === 'en' ? 'Spin the Wheel' : 'Glücksrad', icon: Disc3},
     greetings: { label: language === 'en' ? 'Greetings' : 'Begrüßungen', icon: Bell },
     diagnostics: { label: language === 'en' ? 'Diagnostics' : 'Diagnose', icon: Activity },
     settings: { label: 'Setup', icon: Settings },
@@ -861,6 +897,7 @@ export default function App() {
                 );
               })}
             </nav>
+            {__LOCAL_RESTART__ && <LocalRestartButton className="drawer-reveal shrink-0 mx-3 mb-3 [&_button]:w-full [&_button]:justify-center" />}
             <button
               type="button"
               onClick={() => setQuoteIndex(prev => (prev + 1) % BOT_QUOTES.length)}
@@ -990,6 +1027,8 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'games' && <div id="panel-games" role="tabpanel" aria-labelledby="tab-games"><Suspense fallback={<LazyFallback/>}><GamesStudio /></Suspense></div>}
+          {activeTab === 'wheel' && <div id="panel-wheel" role="tabpanel" aria-labelledby="tab-wheel"><Suspense fallback={<LazyFallback/>}><WheelStudio /></Suspense></div>}
           {activeTab === 'greetings' && <div id="panel-greetings" role="tabpanel" aria-labelledby="tab-greetings"><Suspense fallback={<LazyFallback/>}><GreetingStudio /></Suspense></div>}
 
           {activeTab === 'chat' && (

@@ -164,6 +164,7 @@ export class BotClient {
     }
   }
 
+
   /** Downloads album art through the bot's artwork proxy and returns it as a data URI (or null). */
   async fetchArtwork(url: string): Promise<string | null> {
     try {

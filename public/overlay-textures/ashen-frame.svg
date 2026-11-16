@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1568 690" preserveAspectRatio="none" fill="none">
+ <defs>
+  <g id="c" stroke="#a67c43" stroke-width="2">
+   <path d="M78 42H36C35 56 25 76 2 77V118M84 47H42C41 65 27 82 8 84V124"/>
+   <path d="M2 77C26 78 38 62 32 48C28 37 13 37 12 48C11 57 22 58 23 51C23 46 17 46 17 50M8 84C35 82 46 64 40 47"/>
+   
+   <path d="M10 78C21 76 31 68 33 59" stroke="#d1a360" stroke-width=".7"/>
+   <circle cx="40" cy="42" r="1.4" fill="#be9459" stroke="none"/>
+  </g>
+ </defs>
+ <g transform="translate(32 0)"><use href="#c"/></g>
+ <g transform="translate(1536 0) scale(-1 1)"><use href="#c"/></g>
+ <g transform="translate(32 700) scale(1 -1)"><use href="#c"/></g>
+ <g transform="translate(1536 700) scale(-1 -1)"><use href="#c"/></g>
+ <path d="M110 42H1458M116 47H1452M110 658H1458M116 653H1452M34 118V582M40 124V576M1534 118V582M1528 124V576" stroke="#9b7546" stroke-width="1.8"/>
+ <path d="M110 44H1458M110 656H1458M36 118V582M1532 118V582" stroke="#493824" stroke-width="1"/>
+</svg>

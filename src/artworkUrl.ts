@@ -6,7 +6,7 @@
 export function artworkUrl(value?: string | null): string {
   const url = (value || '').trim();
   if (!url) return '';
-  if (url.startsWith('/')) return url;
+  if (url.startsWith('/') || url.startsWith('data:') || url.startsWith('blob:')) return url;
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';

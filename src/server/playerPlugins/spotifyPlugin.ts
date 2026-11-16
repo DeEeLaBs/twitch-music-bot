@@ -66,28 +66,52 @@ export class SpotifyPlugin implements PlayerPlugin {
   }
 
   public async play(): Promise<boolean> {
-    return this.spotifyService.play();
+    try {
+      return await this.spotifyService.play();
+    } catch {
+      return false;
+    }
   }
 
   public async pause(): Promise<boolean> {
-    return this.spotifyService.pause();
+    try {
+      return await this.spotifyService.pause();
+    } catch {
+      return false;
+    }
   }
 
   public async playPause(currentPlaybackState?: PlaybackState): Promise<boolean> {
-    const isPlaying = currentPlaybackState?.isPlaying ?? this.spotifyService.getSnapshot().isPlaying;
-    return isPlaying ? this.spotifyService.pause() : this.spotifyService.play();
+    try {
+      const isPlaying = currentPlaybackState?.isPlaying ?? this.spotifyService.getSnapshot().isPlaying;
+      return isPlaying ? await this.spotifyService.pause() : await this.spotifyService.play();
+    } catch {
+      return false;
+    }
   }
 
   public async skip(): Promise<boolean> {
-    return this.spotifyService.next();
+    try {
+      return await this.spotifyService.next();
+    } catch {
+      return false;
+    }
   }
 
   public async previousTrack(): Promise<boolean> {
-    return this.spotifyService.previous();
+    try {
+      return await this.spotifyService.previous();
+    } catch {
+      return false;
+    }
   }
 
   public async setVolume(volume: number): Promise<boolean> {
-    return this.spotifyService.setVolume(volume);
+    try {
+      return await this.spotifyService.setVolume(volume);
+    } catch {
+      return false;
+    }
   }
 
   public getPlaybackSnapshot(): Partial<PlaybackState> {

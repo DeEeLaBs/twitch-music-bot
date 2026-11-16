@@ -89,6 +89,22 @@ function harness(playbackProvider: 'youtube_music' | 'spotify' = 'youtube_music'
   return { bot, queue, calls, messages, streamPlaylistService };
 }
 
+test('now playing omits phone details for Nectar while retaining real requesters', async () => {
+  for (const command of ['!np', '!song', '!current']) {
+    const { bot, queue, messages } = harness();
+    const song = queue.getPlaybackState().currentSong;
+    song.id = 'nectar-phone-song';
+    song.requester = { ...viewer, username: 'nectar', displayName: 'Poweramp on Redmi Phone' };
+    await bot.processCommandOrChat(viewer, command);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /First song/);
+    assert.doesNotMatch(messages[0], /Poweramp|Redmi|Phone|Req by/);
+  }
+  const { bot, messages } = harness();
+  await bot.processCommandOrChat(viewer, '!np');
+  assert.match(messages[0], /Req by/);
+});
+
 test('public chat commands and aliases dispatch to the intended actions', async () => {
   const { bot, calls, messages } = harness();
   await bot.processCommandOrChat(viewer, '!help');
@@ -476,17 +492,14 @@ test('ConfigService preserves empty command permissions to allow disabling comma
    const statuses: string[]=[];
    const {bot,queue}=harness('spotify');
    const track={...queue.getQueue()[0],requestedAt:Date.now()};
-   let persisted=0;
    Object.assign(queue,{
-     addSong: () => ({success:true,position:1,track}),
-     persistRedemptionMetadata: () => persisted++,
+     addSong: (_song: unknown, _user: Requester, redemption: Pick<Track, 'rewardId' | 'redemptionId'>) => ({success:true,position:1,track:Object.assign(track, redemption)}),
      withdrawLatestRequest: () => ({track})
    });
    ChannelPointsService.updateRedemptionStatus=async (_config,_reward,_redemption,status) => {statuses.push(status);return true;};
    try {
      await bot.processCommandOrChat(viewer,'Song',true,{rewardId:'reward',redemptionId:'redemption'});
      assert.deepEqual(statuses,[]);
-     assert.equal(persisted,1);
      assert.equal(track.redemptionId,'redemption');
      assert.equal(track.rewardId,'reward');
      await bot.processCommandOrChat(viewer,'!wrongsong');

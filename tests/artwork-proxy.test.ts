@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
 import { createArtworkProxyRouter } from '../src/server/artworkProxy.ts';
+import { artworkUrl } from '../src/artworkUrl.ts';
 
 async function withProxy(run: (request: () => Promise<number>) => Promise<void>) {
   const app = express();
@@ -104,4 +105,15 @@ test('advertised oversized artwork is canceled without reading the body', async 
     assert.equal(canceled, true);
     assert.equal(pulls, 0);
   });
+});
+
+test('artworkUrl helper preserves data, blob, and relative paths and proxies http/https', () => {
+  assert.equal(artworkUrl(''), '');
+  assert.equal(artworkUrl(null), '');
+  assert.equal(artworkUrl('   '), '');
+  assert.equal(artworkUrl('data:image/jpeg;base64,/9j/4AAQ...'), 'data:image/jpeg;base64,/9j/4AAQ...');
+  assert.equal(artworkUrl('blob:http://localhost:3000/123-456'), 'blob:http://localhost:3000/123-456');
+  assert.equal(artworkUrl('/api/nectar/cover?v=123'), '/api/nectar/cover?v=123');
+  assert.equal(artworkUrl('https://i.scdn.co/image/test'), '/artwork-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftest');
+  assert.equal(artworkUrl('ftp://example.com/art.png'), '');
 });

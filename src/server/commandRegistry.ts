@@ -1,6 +1,7 @@
 import type { BadgeType } from '../types.ts';
 
 export type CommandName =
+  | 'game' | 'play' | 'points'
   | 'sr'
   | 'song'
   | 'queue'
@@ -28,8 +29,11 @@ const ALL_ROLES: BadgeType[] = ['viewer', 'subscriber', 'vip', 'moderator', 'bro
 const MOD_ROLES: BadgeType[] = ['moderator', 'broadcaster'];
 
 export const COMMANDS: CommandDefinition[] = [
+  { name: 'game', aliases: ['spiel', 'quiz', 'zahlenraten', 'wortraten', 'abenteuer'], defaultPermissions: MOD_ROLES },
+  { name: 'play', aliases: ['antwort'], defaultPermissions: ALL_ROLES },
+  { name: 'points', aliases: ['punkte'], defaultPermissions: ALL_ROLES },
   { name: 'sr', aliases: ['songrequest'], defaultPermissions: ALL_ROLES },
-  { name: 'song', aliases: ['np', 'current'], defaultPermissions: ALL_ROLES },
+  { name: 'song', aliases: ['np', 'current', 'link', 'track'], defaultPermissions: ALL_ROLES },
   { name: 'queue', defaultPermissions: ALL_ROLES },
   { name: 'help', defaultPermissions: ALL_ROLES },
   { name: 'voteskip', defaultPermissions: ALL_ROLES },

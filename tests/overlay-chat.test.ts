@@ -127,6 +127,18 @@ test('chat options survive an overlay URL round-trip', () => {
   assert.equal(normalizeChat({ motion: 'wipe', exitMotion: 'flash' }).exitMotion, 'flash');
 });
 
+test('Ashen chat persists independently and preserves existing chat options', () => {
+  const chat = normalizeChat({...DEFAULT_CHAT_OPTIONS, style:'ashen',showEmotes:false,fontFamily:'Optimus Princeps',opacity:70});
+  assert.equal(chat.style,'ashen');
+  assert.deepEqual(normalizeChat(JSON.parse(JSON.stringify(chat))),chat);
+  const linked = chatFromParams(new URLSearchParams(chatSearchParams(chat)));
+  assert.equal(linked.style,'ashen');
+  assert.equal(linked.showEmotes,false);
+  assert.equal(linked.opacity,70);
+  assert.equal(normalizeChat({style:'classic'}).style,'classic');
+  assert.equal(normalizeChat({style:'ashen',showBackground:false}).showBackground,false);
+});
+
 test('lifetime exit animates and a full buffer cut does not', () => {
   const options = { ...DEFAULT_CHAT_OPTIONS, enabled: true, lifetimeSeconds: 10, fadeMs: 180, motion: 'rise' as const, maxLines: 1 };
   const older = line({ id: 'old', text: 'old', ts: 1_000 });

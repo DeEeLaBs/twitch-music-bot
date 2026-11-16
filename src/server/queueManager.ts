@@ -1,10 +1,12 @@
+import { nectarBridge } from './nectarBridge.ts';
+import { logger } from './logger.ts';
 import { QueuePersistence } from './queuePersistence.ts';
 import type { BlacklistRule, BotConfig, PlaybackState, Requester, Track, VoteSkipState } from '../types.ts';
 import type { ResolvedTrackInfo } from './youtubeResolver.ts';
 import type { YtmCompanionClient } from './ytmCompanion.ts';
 import type { SpotifyService, SpotifyPlaybackSnapshot } from './spotifyService.ts';
 import { botEvents } from './eventBus.ts';
-import { PlayerPluginRegistry, YouTubeMusicPlugin, SpotifyPlugin, type PlayerPlugin } from './playerPlugins/index.ts';
+import { PlayerPluginRegistry, YouTubeMusicPlugin, SpotifyPlugin, NectarPlugin, type PlayerPlugin } from './playerPlugins/index.ts';
 
 export interface AddSongResult {
   success: boolean;
@@ -36,6 +38,7 @@ export class QueueManager {
   private config: BotConfig;
   private ytmCompanion: YtmCompanionClient;
   public readonly spotifyService?: SpotifyService;
+  public readonly nectarPlugin: NectarPlugin;
   public readonly playerRegistry: PlayerPluginRegistry;
   private persistence: QueuePersistence;
   private onStateChangeCb: (() => void) | null = null;
@@ -47,12 +50,72 @@ export class QueueManager {
     this.config = config;
     this.ytmCompanion = ytmCompanion;
     this.spotifyService = spotifyService;
+        this.nectarPlugin = new NectarPlugin();
+    nectarBridge.on('state', (state) => {
+      if (this.currentTrack || this.pendingTrack) return;
+      if (this.playbackState.source === 'queue') return;
+      const primaryActive = this.playbackState.isPlaying && !this.playbackState.currentSong?.id?.startsWith('nectar-');
+      if (primaryActive) return;
+      if (state.title) {
+        const track = nectarBridge.toTrack();
+        if (!track) return;
+        const isSameSong = this.playbackState.currentSong?.id === track.id && this.playbackState.currentSong?.album === track.album;
+        const artChanged = Boolean(track.albumArtUrl && this.playbackState.currentSong?.albumArtUrl !== track.albumArtUrl);
+        const urlChanged = Boolean(track.url && this.playbackState.currentSong?.url !== track.url);
+
+        if (isSameSong && this.playbackState.currentSong) {
+          track.requestedAt = this.playbackState.currentSong.requestedAt;
+          if (!track.albumArtUrl && this.playbackState.currentSong.albumArtUrl) {
+            track.albumArtUrl = this.playbackState.currentSong.albumArtUrl;
+          }
+          if (!track.url && this.playbackState.currentSong.url) {
+            track.url = this.playbackState.currentSong.url;
+          }
+        }
+
+        const isPlayingChanged = this.playbackState.isPlaying !== state.isPlaying;
+        const progressChanged = Math.abs(this.playbackState.progressSeconds - state.progressSeconds) >= 1;
+        const durationChanged = Math.abs(this.playbackState.durationSeconds - state.durationSeconds) >= 1;
+
+        if (state.isPlaying || !isSameSong || artChanged || urlChanged || isPlayingChanged || progressChanged || durationChanged) {
+          this.playbackState = {
+            ...this.playbackState,
+            currentSong: track,
+            isPlaying: state.isPlaying,
+            progressSeconds: state.progressSeconds,
+            durationSeconds: state.durationSeconds,
+            source: 'external',
+            status: state.isPlaying ? 'playing' : 'paused'
+          };
+          this.notify();
+          return;
+        } else if (!state.isPlaying && this.playbackState.isPlaying) {
+          this.playbackState = {
+            ...this.playbackState,
+            isPlaying: false,
+            status: 'paused'
+          };
+          this.notify();
+          return;
+        }
+      } else if (!state.title && this.playbackState.currentSong?.id?.startsWith('nectar-')) {
+        this.playbackState = {
+          ...this.playbackState,
+          currentSong: null,
+          isPlaying: false,
+          source: 'idle',
+          status: 'paused'
+        };
+        this.notify();
+      }
+    });
     if (playerRegistry) {
       this.playerRegistry = playerRegistry;
     } else {
       this.playerRegistry = new PlayerPluginRegistry([
         new YouTubeMusicPlugin(this.ytmCompanion),
-        ...(this.spotifyService ? [new SpotifyPlugin(this.spotifyService)] : [])
+        ...(this.spotifyService ? [new SpotifyPlugin(this.spotifyService)] : []),
+        this.nectarPlugin
       ]);
     }
     this.persistence = persistence || new QueuePersistence();
@@ -85,8 +148,10 @@ export class QueueManager {
   public saveQueue() {
     try {
       this.persistence.saveQueue(this.queue, this.pendingTrack, this.currentTrack, this.recoveredTrack, this.history);
+      return true;
     } catch {
       this.playbackError = this.text('Daten konnten nicht gespeichert werden. Schreibrechte im data-Ordner prüfen.', 'Data could not be saved. Check write permissions for the data folder.');
+      return false;
     }
   }
 
@@ -166,7 +231,8 @@ export class QueueManager {
     this.ytmCompanion.subscribe(info => {
       if (this.config.playbackProvider === 'spotify') return;
       if (this.currentTrack?.playbackProvider === 'spotify' || this.pendingTrack?.playbackProvider === 'spotify') return;
-      if (!this.currentTrack && !this.pendingTrack && this.playbackState.currentSong?.playbackProvider === 'spotify' && this.playbackState.source === 'external' && (this.playbackState.isPlaying || !info.isPlaying)) return;
+      const isNectarActive = Boolean(this.playbackState.currentSong?.id?.startsWith('nectar-'));
+      if (!this.currentTrack && !this.pendingTrack && (this.playbackState.currentSong?.playbackProvider === 'spotify' || isNectarActive) && this.playbackState.source === 'external' && (this.playbackState.isPlaying || !info.isPlaying)) return;
       if (info.isConnected && /no_active_ytm_webContents|YouTube Music wird noch geladen/i.test(this.playbackError)) {
         this.playbackError = '';
       }
@@ -240,6 +306,7 @@ export class QueueManager {
           };
           this.playbackState.durationSeconds = trackDuration;
         } else {
+          if (isNectarActive && !info.isPlaying) return;
           this.playbackState.source = 'autoplay_radio';
           const existingSong = this.playbackState.currentSong;
           const sameSong = existingSong && ((song.id && existingSong.videoId === song.id) || (song.title && existingSong.title === song.title));
@@ -271,7 +338,11 @@ export class QueueManager {
           };
           this.playbackState.durationSeconds = finalDuration;
         }
-      } else if (!this.currentTrack) { this.playbackState.currentSong = null; this.playbackState.source = 'idle'; }
+      } else if (!this.currentTrack) {
+        if (this.playbackState.currentSong?.id?.startsWith('nectar-') && (this.playbackState.isPlaying || !info.isPlaying)) return;
+        this.playbackState.currentSong = null;
+        this.playbackState.source = 'idle';
+      }
       // Only advance a confirmed request. Never use guessed metadata duration.
       const checkDuration = (this.currentTrack && this.currentTrack.duration > 0) ? this.currentTrack.duration : info.durationSeconds;
       if (this.currentTrack && checkDuration > 0 && (info.progressSeconds >= checkDuration - 0.5 || (info.durationSeconds > 0 && info.progressSeconds >= info.durationSeconds - 0.5))) {
@@ -342,7 +413,9 @@ export class QueueManager {
       }
       if (this.currentTrack?.playbackProvider !== 'spotify') {
         if (this.currentTrack || this.pendingTrack) return;
+        const isNectarActive = Boolean(this.playbackState.currentSong?.id?.startsWith('nectar-'));
         if (this.playbackState.currentSong?.playbackProvider === 'youtube_music' && (this.playbackState.isPlaying || !info.isPlaying)) return;
+        if (isNectarActive && (this.playbackState.isPlaying || !info.isPlaying)) return;
         const previousSong = this.playbackState.currentSong;
         const wasExternalSpotify = this.playbackState.source === 'external' && previousSong?.playbackProvider === 'spotify';
         const changedTrack = wasExternalSpotify && previousSong.spotifyUri && info.trackUri && previousSong.spotifyUri !== info.trackUri;
@@ -354,12 +427,12 @@ export class QueueManager {
           info.progressSeconds >= info.durationSeconds - 0.5;
         // Playlist playback has no current request, but must hand over at a song boundary.
         if ((changedTrack || stoppedAtEnd || reachedEnd) && !this.transition && !this.playbackError &&
-            this.queue.some(track => (track.playbackProvider || (track.spotifyUri ? 'spotify' : 'youtube_music')) === 'spotify')) {
+            this.nextRequestIndex('spotify') >= 0) {
           void this.playNext();
           return;
         }
         if (!info.trackUri && !info.title) {
-          if (this.playbackState.currentSong?.playbackProvider === 'spotify') {
+          if (this.playbackState.currentSong?.playbackProvider === 'spotify' && !this.playbackState.currentSong?.id?.startsWith('nectar-')) {
             this.playbackState = {
               ...this.playbackState,
               currentSong: null,
@@ -383,6 +456,7 @@ export class QueueManager {
             this.lastArchivedSpotifyUri = null;
           }
         }
+        if (isNectarActive && !info.isPlaying) return;
         const existingSong = this.playbackState.currentSong;
         const spotifyId = info.trackId || info.trackUri || info.title || 'current';
         const sameSong = existingSong?.playbackProvider === 'spotify' &&
@@ -409,7 +483,7 @@ export class QueueManager {
           source: 'external',
           status: info.isPlaying ? 'playing' : 'paused'
         };
-        if (!this.queue.some(track => (track.playbackProvider || (track.spotifyUri ? 'spotify' : 'youtube_music')) === 'spotify')) {
+        if (this.nextRequestIndex('spotify') < 0) {
           this.playbackError = '';
         }
         this.notify();
@@ -423,12 +497,24 @@ export class QueueManager {
       const stoppedAtEnd = !info.isPlaying && previouslyNearEnd &&
         (!info.trackUri || (info.trackUri === expectedUri && info.progressSeconds === 0));
       const stoppedNoTrack = !info.isPlaying && !info.trackUri && this.playbackState.isPlaying;
+      const changedTitle = Boolean(expectedUri && info.trackUri && info.trackUri !== expectedUri);
+      if ((changedTitle || stoppedNoTrack) && !previouslyNearEnd) {
+        const interrupted = this.currentTrack;
+        if (!this.queue.some(track => track.id === interrupted.id)) this.queue.unshift(interrupted);
+        this.currentTrack = null;
+        this.playbackState = { ...this.playbackState, source: 'idle', status: 'paused', currentSong: null, isPlaying: false, progressSeconds: 0, durationSeconds: 0 };
+        this.playbackError = this.text('Spotify-Wiedergabe unterbrochen. Der Song steht wieder vorn in der Warteschlange.', 'Spotify playback interrupted. The request is back at the front of the queue.');
+        this.saveQueue();
+        this.notify();
+        return;
+      }
       if (stoppedAtEnd || stoppedNoTrack) {
         this.archiveCurrent();
         void this.continueSpotifyAfterRequest();
         return;
       }
-      if (expectedUri && info.trackUri && info.trackUri !== expectedUri) {
+      if (changedTitle) {
+        logger.log('info', 'QUEUE', 'Spotify meldet einen anderen Titel; Request wird abgeschlossen.', { requestId: this.currentTrack.id, expectedUri, reportedUri: info.trackUri, progressSeconds: info.progressSeconds });
         this.archiveCurrent();
         void this.continueSpotifyAfterRequest();
         return;
@@ -467,7 +553,7 @@ export class QueueManager {
   private spotifyContinuationPending = false;
   private async continueSpotifyAfterRequest() {
     if (this.spotifyContinuationPending || this.config.playbackProvider !== 'spotify') return;
-    if (this.queue.some(track => (track.playbackProvider || (track.spotifyUri ? 'spotify' : 'youtube_music')) === 'spotify')) {
+    if (this.nextRequestIndex('spotify') >= 0) {
       if (!this.playbackError) await this.playNext();
       return;
     }
@@ -523,29 +609,34 @@ export class QueueManager {
   /**
    * Validate and add a song to the FIFO queue
    */
-  public addSong(resolved: ResolvedTrackInfo, requester?: Requester): AddSongResult {
+  public addSong(resolved: ResolvedTrackInfo, requester?: Requester, redemption?: Pick<Track, 'rewardId' | 'redemptionId'>): AddSongResult {
     if (this.config.playbackProvider === 'spotify' && !resolved.spotifyUri) return { success: false, error: this.text('Für den gewählten Spotify-Player fehlt ein Spotify-Titel.', 'The selected Spotify player requires a Spotify track.') };
     if (!Number.isFinite(resolved.duration) || resolved.duration <= 0) return { success: false, error: this.text('Songdauer konnte nicht zuverlässig ermittelt werden.', 'Song duration could not be determined reliably.') };
     const effectiveRequester: Requester = requester || (resolved as any).requester || { username: 'anonymous', displayName: 'Anonymous', badge: 'viewer' };
     const requesterName = (effectiveRequester.username || '').toLowerCase();
     const isPrivileged = effectiveRequester.badge === 'broadcaster' || effectiveRequester.badge === 'moderator';
+    if (this.config.songRequestsOpen === false && !isPrivileged) return { success: false, error: this.text('Songwünsche sind geschlossen.', 'Song requests are closed.') };
     if (this.blockedRequesterSet.has(requesterName) && !isPrivileged) return { success:false, error:this.text('Du bist vorübergehend für Songrequests gesperrt.', 'You are temporarily blocked from requesting songs.') };
     const maxQueue=this.config.maxQueueSize || 100;
     if (this.queue.length >= maxQueue) return { success: false, error: this.text(`Warteschlange voll (${maxQueue} Songs).`, `Queue is full (${maxQueue} songs).`) };
     const minDuration=this.config.minSongDurationSeconds || 0;
     if (resolved.duration < minDuration) return { success:false, error:this.text(`Song ist kürzer als die Mindestlänge (${minDuration}s).`, `Song is shorter than the minimum duration (${minDuration}s).`) };
     const recentCount=this.config.preventRecentDuplicates || 0;
+    const sameRequestedTrack = (track: Track | null | undefined) => Boolean(track && (
+      (resolved.spotifyUri && track.spotifyUri === resolved.spotifyUri) ||
+      (resolved.videoId && track.videoId === resolved.videoId)
+    ));
     if (recentCount > 0) {
       const recentLimit = Math.min(recentCount, this.history.length);
       for (let index = 0; index < recentLimit; index++) {
-        if (this.history[index]?.videoId === resolved.videoId) return { success:false, error:this.text(`Dieser Song lief bereits in den letzten ${recentCount} Titeln.`, `This song was already played within the last ${recentCount} tracks.`) };
+        if (sameRequestedTrack(this.history[index])) return { success:false, error:this.text(`Dieser Song lief bereits in den letzten ${recentCount} Titeln.`, `This song was already played within the last ${recentCount} tracks.`) };
       }
     }
     const externalSpotifyUri = !this.currentTrack && this.playbackState.source === 'external'
       ? this.playbackState.currentSong?.spotifyUri
       : undefined;
     const sameExternalSpotify = Boolean(resolved.spotifyUri && externalSpotifyUri && resolved.spotifyUri === externalSpotifyUri);
-    if (sameExternalSpotify || this.queue.some(track => track.videoId === resolved.videoId) || this.currentTrack?.videoId === resolved.videoId || this.pendingTrack?.videoId === resolved.videoId || this.recoveredTrack?.videoId === resolved.videoId) return { success: false, error: this.text('Dieser Song ist bereits aktiv oder in der Warteschlange.', 'This song is already playing or in the queue.') };
+    if (sameExternalSpotify || this.queue.some(sameRequestedTrack) || sameRequestedTrack(this.currentTrack) || sameRequestedTrack(this.pendingTrack) || sameRequestedTrack(this.recoveredTrack)) return { success: false, error: this.text('Dieser Song ist bereits aktiv oder in der Warteschlange.', 'This song is already playing or in the queue.') };
     // 1. Duration Limit Check (default 7 minutes / 420 seconds)
     const maxDuration = this.config.maxSongDurationSeconds || 420;
     if (resolved.duration > maxDuration) {
@@ -603,6 +694,8 @@ export class QueueManager {
       url: resolved.url,
       videoId: resolved.videoId,
       requester: effectiveRequester,
+      rewardId: redemption?.rewardId,
+      redemptionId: redemption?.redemptionId,
       requestedAt: Date.now(),
       requestSource: resolved.requestSource,
       originalRequestUrl: resolved.originalRequestUrl,
@@ -616,7 +709,13 @@ export class QueueManager {
     };
 
     this.queue.push(track);
-    this.saveQueue();
+    const previousError = this.playbackError;
+    if (!this.saveQueue()) {
+      this.queue.pop();
+      const error = this.playbackError;
+      this.playbackError = previousError;
+      return { success: false, error };
+    }
     const position = this.queue.length;
     // An externally started song owns the selected player too. Keep new
     // requests queued until that playback is explicitly advanced or ends.
@@ -631,18 +730,21 @@ export class QueueManager {
     this.transition = Promise.resolve().then(() => this.startNext()).finally(() => { this.transition = null; this.notify(); });
     return this.transition;
   }
+  private nextRequestIndex(provider = this.config.playbackProvider || 'youtube_music'): number {
+    return this.queue.findIndex(track => (track.playbackProvider ?? (track.spotifyUri ? 'spotify' : 'youtube_music')) === provider);
+  }
+
   private async startNext(): Promise<Track | null> {
     if (this.recoveredTrack) { this.queue.unshift(this.recoveredTrack); this.recoveredTrack = null; }
     if (!this.queue.length) return null;
     const selectedProvider = this.config.playbackProvider || 'youtube_music';
-    const nextIndex = this.queue.findIndex(track => (track.playbackProvider || (track.spotifyUri ? 'spotify' : 'youtube_music')) === selectedProvider);
+    const nextIndex = this.nextRequestIndex(selectedProvider);
     if (nextIndex < 0) return null;
     let next = this.queue.splice(nextIndex, 1)[0];
     const generation = this.providerGeneration;
     this.playbackError = '';
 
-    const requestedProvider = next.playbackProvider || (next.spotifyUri && this.config.playbackProvider === 'spotify' ? 'spotify' : 'youtube_music');
-    const spotifyRequested = requestedProvider === 'spotify';
+    const spotifyRequested = selectedProvider === 'spotify';
     if (spotifyRequested && (!next.spotifyUri || !this.spotifyService)) {
       this.queue.splice(nextIndex, 0, next);
       this.playbackError = this.text('Spotify-Titel oder Spotify-Verbindung fehlt.', 'Spotify track or connection is missing.');
@@ -656,6 +758,7 @@ export class QueueManager {
     }
 
     next.playbackProvider = spotifyReady ? 'spotify' : 'youtube_music';
+    const previousPlayback = this.playbackState;
     this.pendingTrack = next;
     this.playbackState = {
       ...this.playbackState,
@@ -665,8 +768,18 @@ export class QueueManager {
       durationSeconds: next.duration,
       source: 'queue'
     };
-    this.saveQueue(); this.notify();
+    if (!this.saveQueue()) {
+      this.queue.splice(nextIndex, 0, next);
+      this.pendingTrack = null;
+      this.playbackState = previousPlayback;
+      return null;
+    }
+    this.notify();
     try {
+      if (this.config.nectarPauseOnRequest !== false && this.nectarPlugin?.isPlaying()) {
+        await this.nectarPlugin.pause();
+        if (generation !== this.providerGeneration) return null;
+      }
       if (next.playbackProvider === 'spotify') {
         const spotifyPlugin = this.playerRegistry.get('spotify');
         // Prevent two playback engines from running at the same time.
@@ -691,6 +804,7 @@ export class QueueManager {
         }
 
         if (!started) {
+            logger.log('warn', 'QUEUE', 'Spotify-Requeststart nicht bestätigt; Request bleibt erhalten.', { requestId: next.id, spotifyUri: next.spotifyUri, error: this.playbackError || this.spotifyService?.getLastError() });
             this.queue.unshift(next);
             if (!this.playbackError) {
               this.playbackError = this.spotifyService?.getLastError() || this.text('Spotify-Songstart wurde nicht bestätigt.', 'Spotify track start was not confirmed.');
@@ -705,6 +819,8 @@ export class QueueManager {
           const spotify = this.spotifyService?.getSnapshot();
           const spotifySong: Track = {
             ...next,
+            // Follow the URI Spotify actually confirmed for this recording.
+            spotifyUri: spotify?.trackUri || next.spotifyUri,
             title: spotify?.title || next.title,
             artist: spotify?.artist || next.artist,
             albumArtUrl: spotify?.albumArtUrl || next.albumArtUrl,
@@ -781,49 +897,78 @@ export class QueueManager {
   }
 
   public getActivePlugin(): PlayerPlugin {
+    if (!this.currentTrack && !this.pendingTrack && this.playbackState.currentSong?.id?.startsWith('nectar-') && this.nectarPlugin) {
+      return this.nectarPlugin;
+    }
     return this.playerRegistry.getActivePlugin(this.config.playbackProvider || 'youtube_music');
   }
 
   public async playPause(): Promise<boolean> {
-    const plugin = this.getActivePlugin();
-    return plugin.playPause(this.playbackState);
+    try {
+      const plugin = this.getActivePlugin();
+      return await plugin.playPause(this.playbackState);
+    } catch (err: unknown) {
+      this.playbackError = err instanceof Error ? err.message : String(err);
+      return false;
+    }
   }
 
   public async pause(): Promise<boolean> {
-    const plugin = this.getActivePlugin();
-    return plugin.pause();
+    try {
+      const plugin = this.getActivePlugin();
+      return await plugin.pause();
+    } catch (err: unknown) {
+      this.playbackError = err instanceof Error ? err.message : String(err);
+      return false;
+    }
   }
 
   public async play(): Promise<boolean> {
-    const plugin = this.getActivePlugin();
-    return plugin.play();
+    try {
+      const plugin = this.getActivePlugin();
+      return await plugin.play();
+    } catch (err: unknown) {
+      this.playbackError = err instanceof Error ? err.message : String(err);
+      return false;
+    }
   }
 
   public async previousTrack(): Promise<boolean> {
-    const plugin = this.getActivePlugin();
-    if (this.playbackState.progressSeconds > 3) {
-      if (plugin.previousTrack) return plugin.previousTrack();
+    try {
+      const plugin = this.getActivePlugin();
+      if (this.playbackState.progressSeconds > 3) {
+        if (plugin.previousTrack) return await plugin.previousTrack();
+        return false;
+      }
+      if (this.playbackState.source === 'queue' && this.history.length > 0) {
+        const prevTrack = this.history.shift()!;
+        if (this.currentTrack) {
+          this.queue.unshift(this.currentTrack);
+        }
+        this.queue.unshift(prevTrack);
+        const next = await this.playNext();
+        return Boolean(next);
+      }
+      if (plugin.previousTrack) return await plugin.previousTrack();
+      return false;
+    } catch (err: unknown) {
+      this.playbackError = err instanceof Error ? err.message : String(err);
       return false;
     }
-    if (this.playbackState.source === 'queue' && this.history.length > 0) {
-      const prevTrack = this.history.shift()!;
-      if (this.currentTrack) {
-        this.queue.unshift(this.currentTrack);
-      }
-      this.queue.unshift(prevTrack);
-      const next = await this.playNext();
-      return Boolean(next);
-    }
-    if (plugin.previousTrack) return plugin.previousTrack();
-    return false;
   }
 
   public async setVolume(volume: number): Promise<boolean> {
+    if (this.getActivePlugin().id === 'nectar') return false;
     const safeVolume = Math.max(0, Math.min(100, Math.round(volume)));
     this.playbackState.volume = safeVolume;
     this.notify();
-    const plugin = this.getActivePlugin();
-    return plugin.setVolume(safeVolume);
+    try {
+      const plugin = this.getActivePlugin();
+      return await plugin.setVolume(safeVolume);
+    } catch (err: unknown) {
+      this.playbackError = err instanceof Error ? err.message : String(err);
+      return false;
+    }
   }
 
   public moveTrack(trackId: string, newIndex: number): boolean {
@@ -855,27 +1000,9 @@ export class QueueManager {
    */
   public async skipCurrent(_modUsername: string): Promise<{ success: boolean; nextTrack: Track | null }> {
     if (this.transition || this.skipping) return { success: false, nextTrack: null };
-    if (this.queue.some(track => (track.playbackProvider || (track.spotifyUri ? 'spotify' : 'youtube_music')) === (this.config.playbackProvider || 'youtube_music'))) {
+    if (this.nextRequestIndex() >= 0) {
       const nextTrack = await this.playNext();
-      if (nextTrack) {
-        return { success: true, nextTrack };
-      }
-      // A timeout or an unconfirmed start leaves the request queued so it can be retried.
-      if (this.failedStartShouldStayQueued()) return { success: false, nextTrack: null };
-      // A confirmed rejection cannot start. Drop that track and refund its redemption.
-      const failedIndex = this.queue.findIndex(track => (track.playbackProvider || (track.spotifyUri ? 'spotify' : 'youtube_music')) === (this.config.playbackProvider || 'youtube_music'));
-      if (failedIndex >= 0) {
-        const [removed] = this.queue.splice(failedIndex, 1);
-        this.saveQueue();
-        if (removed) botEvents.emit('queue:request_removed', { track: removed });
-        if (this.queue.some(track => (track.playbackProvider || (track.spotifyUri ? 'spotify' : 'youtube_music')) === (this.config.playbackProvider || 'youtube_music'))) {
-          const subsequent = await this.playNext();
-          if (subsequent) {
-            return { success: true, nextTrack: subsequent };
-          }
-          if (this.failedStartShouldStayQueued()) return { success: false, nextTrack: null };
-        }
-      }
+      return { success: Boolean(nextTrack), nextTrack };
     }
     this.skipping = true;
     let success = false;
@@ -914,7 +1041,12 @@ export class QueueManager {
       }
       const plugin = this.getActivePlugin();
       if (plugin.skip) {
-        success = await plugin.skip();
+        try {
+          success = await plugin.skip();
+        } catch (err: unknown) {
+          this.playbackError = err instanceof Error ? err.message : String(err);
+          success = false;
+        }
       }
     } finally {
       this.skipping = false;
@@ -945,7 +1077,6 @@ export class QueueManager {
     this.saveQueue();
   }
 
-  public persistRedemptionMetadata() { this.saveQueue(); }
 
   public withdrawLatestRequest(username: string, now = Date.now()): { track?: Track; reason?: 'missing' | 'expired' } {
     const candidates = this.queue.filter(track => track.requester.username.toLowerCase() === username.toLowerCase());
@@ -960,9 +1091,6 @@ export class QueueManager {
     return { track };
   }
 
-  private failedStartShouldStayQueued(): boolean {
-    return /bleibt erhalten|remains in the queue|wird noch geladen|still loading|within \d+ seconds|nach \d+ Sekunden/i.test(this.playbackError);
-  }
 
   public vetoTrack(trackIdOrIndex: string | number): Track | null {
     let index = -1;
@@ -1153,7 +1281,7 @@ export class QueueManager {
   public updateConfig(newConfig: Partial<BotConfig>) {
     const previousProvider = this.config.playbackProvider || 'youtube_music';
     const nextProvider = newConfig.playbackProvider || previousProvider;
-    const outgoingPlugin = previousProvider !== nextProvider ? this.getActivePlugin() : null;
+    const outgoingPlugin = previousProvider !== nextProvider ? this.playerRegistry.getActivePlugin(previousProvider) : null;
     this.config = { ...this.config, ...newConfig };
     this.refreshBlockedRequesters();
     this.voteSkip.requiredVotes = this.config.voteSkipThreshold || 3;

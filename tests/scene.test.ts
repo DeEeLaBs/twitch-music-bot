@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_CHAT_OPTIONS } from '../src/overlayChat.ts';
 import {
+  updateWidget,
   designForRender,
   displayFrame,
   fitScale,
@@ -117,4 +118,13 @@ test('alignment guides connect centered and symmetric widgets', () => {
   const mirrored = alignmentGuides([box('a', 100, 490), box('b', 1720, 490)], 'a', design);
   assert.equal(mirrored.some(guide => guide.kind === 'symmetric'), true);
   assert.equal(alignmentGuides([box('a', 10, 10), box('b', 400, 700)], 'a', design).length, 0);
+});
+
+test('large player typography survives edits and persisted scene normalization', () => {
+ const scene=sceneFromLegacy({enabled:false,x:0,y:0,width:30,height:50});
+ const player=scene.widgets.find(widget=>widget.type==='music-player')!;
+ const changed=updateWidget(scene,player.id,{fontSize:96});
+ const saved=normalizeScene(JSON.parse(JSON.stringify(changed)))!;
+ assert.equal(saved.widgets.find(widget=>widget.id===player.id)!.fontSize,96);
+ assert.equal(updateWidget(saved,player.id,{fontSize:999}).widgets.find(widget=>widget.id===player.id)!.fontSize,96);
 });

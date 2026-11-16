@@ -1,4 +1,5 @@
 import { chooseSongMatch, type SongMetadata } from './songMatch.ts';
+import type { ResolvedTrackInfo } from './youtubeResolver.ts';
 import crypto from 'node:crypto';
 import { spotifyPlaylistUri } from '../spotifyPlaylist.ts';
 import { spotifyPlaybackPollDelayMs } from './playbackPoll.ts';
@@ -60,6 +61,7 @@ export class SpotifyService {
   private burstGeneration = 0;
   private lastSnapshot: SpotifyPlaybackSnapshot = { connected:false, isPlaying:false, progressSeconds:0, durationSeconds:0, volume:80 };
   private lastError = '';
+  private lastPlaybackTimestamp = 0;
   private profile: { id?: string; display_name?: string; product?: string; country?: string } | null = null;
 
   constructor(clientId = '', preferredDeviceId = '') {
@@ -376,8 +378,18 @@ export class SpotifyService {
     return true;
   }
 
-  async searchTrack(query: string): Promise<any> {
-      const trimmed = query.trim();
+  private readonly pendingSearches = new Map<string, Promise<ResolvedTrackInfo>>();
+
+  searchTrack(query: string): Promise<ResolvedTrackInfo> {
+    const trimmed = query.trim();
+    const pending = this.pendingSearches.get(trimmed);
+    if (pending) return pending;
+    const lookup = this.lookupTrack(trimmed).finally(() => this.pendingSearches.delete(trimmed));
+    this.pendingSearches.set(trimmed, lookup);
+    return lookup;
+  }
+
+  private async lookupTrack(trimmed: string): Promise<ResolvedTrackInfo> {
       const uriMatch = /^spotify:track:([A-Za-z0-9]{22})$/i.exec(trimmed);
       let trackId = uriMatch?.[1];
       if (!trackId) {
@@ -419,7 +431,7 @@ export class SpotifyService {
       throw new Error('Kein Spotify-Treffer für die Suchanfrage gefunden.');
   }
 
-  private spotifyTrackResult(track: any) {
+  private spotifyTrackResult(track: any): ResolvedTrackInfo {
     const artist = Array.isArray(track.artists) ? track.artists.map((entry: any) => entry?.name).filter(Boolean).join(', ') : '';
     return {
       videoId: `spotify-${track.id}`,
@@ -507,9 +519,29 @@ export class SpotifyService {
 
   async waitForUri(uri: string, timeoutMs = 10_000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
+    const recordings = new Map<string, Promise<string | undefined>>();
+    const recording = (trackUri: string) => {
+      const id = /^spotify:track:([A-Za-z0-9]{22})$/.exec(trackUri)?.[1];
+      if (!id) return undefined;
+      let lookup = recordings.get(id);
+      if (!lookup) {
+        lookup = this.api('/tracks/' + id).then(async response => {
+          if (!response.ok) return undefined;
+          const track = await response.json();
+          return typeof track.external_ids?.isrc === 'string' ? track.external_ids.isrc.trim().toUpperCase() : undefined;
+        }).catch(() => undefined);
+        recordings.set(id, lookup);
+      }
+      return lookup;
+    };
     while (Date.now() < deadline) {
       await this.poll();
-      if (this.lastSnapshot.trackUri === uri && this.lastSnapshot.connected) return true;
+      const observed = this.lastSnapshot.trackUri;
+      if (observed && this.lastSnapshot.connected && this.lastSnapshot.isPlaying) {
+        if (observed === uri) return true;
+        const [wanted, actual] = await Promise.all([recording(uri), recording(observed)]);
+        if (wanted && wanted === actual && this.lastSnapshot.trackUri === observed && this.lastSnapshot.connected && this.lastSnapshot.isPlaying) return true;
+      }
       await new Promise(resolve => setTimeout(resolve, 350));
     }
     return false;
@@ -542,6 +574,11 @@ export class SpotifyService {
       }
       if (!response.ok) throw new Error(`Spotify Playback-Status fehlgeschlagen (HTTP ${response.status}).`);
       const data = await response.json() as any;
+      // Spotify can briefly return a sample from before the last confirmed
+      // playback change. Never turn that into a second queue transition.
+      const timestamp = typeof data?.timestamp === 'number' && Number.isFinite(data.timestamp) ? data.timestamp : 0;
+      if (timestamp && timestamp < this.lastPlaybackTimestamp) return this.lastSnapshot;
+      if (timestamp) this.lastPlaybackTimestamp = timestamp;
       const item = data?.item;
       const isPlaying = Boolean(data?.is_playing);
       const snapshot: SpotifyPlaybackSnapshot = {

@@ -2,12 +2,12 @@ import { defaultAlertBox, normalizeAlertBox, type AlertBoxConfig } from './alert
 import { chatFromParams, chatSearchParams, DEFAULT_CHAT_OPTIONS, normalizeChat, type OverlayChatOptions } from './overlayChat.ts';
 import { normalizeScene, type OverlayScene } from './scene.ts';
 
-export const OVERLAY_THEMES = ['glass', 'neon', 'minimal', 'light', 'ocean', 'sunset', 'twitch', 'mono'] as const;
-export const OVERLAY_LAYOUTS = ['horizontal', 'compact', 'stacked', 'banner', 'vertical', 'spotlight', 'textOnly', 'coverCard'] as const;
+export const OVERLAY_THEMES = ['glass', 'neon', 'minimal', 'light', 'ocean', 'sunset', 'twitch', 'mono', 'ashen'] as const;
+export const OVERLAY_LAYOUTS = ['horizontal', 'compact', 'stacked', 'banner', 'vertical', 'spotlight', 'textOnly', 'coverCard', 'ashen'] as const;
 export const OVERLAY_FONT_STYLES = ['modern', 'condensed', 'rounded', 'mono'] as const;
 export const OVERLAY_TEXT_ALIGNS = ['left', 'center'] as const;
 export const OVERLAY_ARTWORK_SHAPES = ['rounded', 'square', 'circle', 'vinyl'] as const;
-export const OVERLAY_ANIMATIONS = ['none', 'fade', 'slide', 'pulse'] as const;
+export const OVERLAY_ANIMATIONS = ['none', 'fade', 'slide', 'pulse', 'ember'] as const;
 export const OVERLAY_PROGRESS_STYLES = ['bar', 'pill', 'waveform', 'ring', 'spark', 'equalizer', 'border'] as const;
 export const OVERLAY_ELEMENT_IDS = ['artwork', 'text', 'meta', 'progress', 'logo'] as const;
 /** How the request popup enters (and leaves). "slideUp" rises from under the overlay's bottom edge. */
@@ -34,6 +34,7 @@ export interface OverlayOptions {
   theme: OverlayTheme;
   layout: OverlayLayout;
   showProgress: boolean;
+  showPlaybackStatus: boolean;
   showArtwork: boolean;
   showRequester: boolean;
   showTime: boolean;
@@ -64,6 +65,8 @@ export interface OverlayOptions {
   fontFamily: string;
   textAlign: OverlayTextAlign;
   artworkShape: OverlayArtworkShape;
+  /** Cover size relative to its layout default; does not resize the player. */
+  artworkScale: number;
   animation: OverlayAnimation;
   progressStyle: OverlayProgressStyle;
   backgroundImageUrl: string;
@@ -84,10 +87,10 @@ export const DEFAULT_OVERLAY_POSITIONS: OverlayPositions = {
 };
 
 export const DEFAULT_OVERLAY_OPTIONS: OverlayOptions = {
-  theme: 'glass', layout: 'horizontal', showProgress: true, showArtwork: true, showRequester: true, showTime: true,
+  theme: 'glass', layout: 'horizontal', showPlaybackStatus: true, showProgress: true, showArtwork: true, showRequester: true, showTime: true,
   showSource: false, showRequesterAvatar: false, showRequesterBadge: true, queuePop: true, queuePopSeconds: 4, queuePopAnimation: 'drop', queuePopPosition: 'top', queuePopStyle: 'accent', queuePopShowArt: true, useMarquee: true, hideWhenIdle: false,
   showLogo: false, showBorder: true, freePositioning: false, accent: '#a855f7', scale: 100, radius: 18, backgroundOpacity: 92,
-  shadowStrength: 55, logoSize: 54, fontStyle: 'modern', fontFamily: '', textAlign: 'left', artworkShape: 'rounded', animation: 'fade',
+  shadowStrength: 55, logoSize: 54, fontStyle: 'modern', fontFamily: '', textAlign: 'left', artworkShape: 'rounded', artworkScale: 100, animation: 'fade',
   progressStyle: 'bar', backgroundImageUrl: '', logoImageUrl: '', customCss: '', positions: DEFAULT_OVERLAY_POSITIONS,
   chat: DEFAULT_CHAT_OPTIONS,
   alertBox: defaultAlertBox()
@@ -98,6 +101,7 @@ export function mergeOverlayOptions(options?: Partial<OverlayOptions> | null): O
   return {
     ...DEFAULT_OVERLAY_OPTIONS,
     ...incoming,
+    artworkScale: typeof incoming.artworkScale === 'number' && Number.isFinite(incoming.artworkScale) ? Math.max(50, Math.min(200, incoming.artworkScale)) : 100,
     fontFamily: String(incoming.fontFamily || '').slice(0, 120),
     positions: { ...DEFAULT_OVERLAY_POSITIONS, ...(incoming.positions || {}) },
     chat: normalizeChat(incoming.chat),
@@ -131,6 +135,7 @@ export function parseOverlayOptions(params: URLSearchParams): OverlayOptions {
     theme: oneOf(params.get('theme'), OVERLAY_THEMES, DEFAULT_OVERLAY_OPTIONS.theme),
     layout: oneOf(params.get('layout'), OVERLAY_LAYOUTS, DEFAULT_OVERLAY_OPTIONS.layout),
     showProgress: isOne(params.get('showProgress'), DEFAULT_OVERLAY_OPTIONS.showProgress),
+    showPlaybackStatus: isOne(params.get('showPlaybackStatus'), DEFAULT_OVERLAY_OPTIONS.showPlaybackStatus),
     showArtwork: isOne(params.get('showArtwork'), DEFAULT_OVERLAY_OPTIONS.showArtwork),
     showRequester: isOne(params.get('showRequester'), DEFAULT_OVERLAY_OPTIONS.showRequester),
     showTime: isOne(params.get('showTime'), DEFAULT_OVERLAY_OPTIONS.showTime),
@@ -158,6 +163,7 @@ export function parseOverlayOptions(params: URLSearchParams): OverlayOptions {
     fontFamily: safeText(params.get('fontFamily'), 120),
     textAlign: oneOf(params.get('textAlign'), OVERLAY_TEXT_ALIGNS, DEFAULT_OVERLAY_OPTIONS.textAlign),
     artworkShape: oneOf(params.get('artworkShape'), OVERLAY_ARTWORK_SHAPES, DEFAULT_OVERLAY_OPTIONS.artworkShape),
+    artworkScale: clampNumber(params.get('artworkScale'), DEFAULT_OVERLAY_OPTIONS.artworkScale, 50, 200),
     animation: oneOf(params.get('animation'), OVERLAY_ANIMATIONS, DEFAULT_OVERLAY_OPTIONS.animation),
     progressStyle: oneOf(params.get('progressStyle'), OVERLAY_PROGRESS_STYLES, DEFAULT_OVERLAY_OPTIONS.progressStyle),
     backgroundImageUrl: safeText(params.get('backgroundImageUrl'), 500),
@@ -177,7 +183,7 @@ export function parseOverlayOptions(params: URLSearchParams): OverlayOptions {
 
 export function createOverlaySearch(options: OverlayOptions): string {
   return new URLSearchParams({
-    theme: options.theme, layout: options.layout, showProgress: options.showProgress ? '1' : '0', showArtwork: options.showArtwork ? '1' : '0',
+    theme: options.theme, layout: options.layout, showPlaybackStatus: options.showPlaybackStatus ? '1' : '0', showProgress: options.showProgress ? '1' : '0', showArtwork: options.showArtwork ? '1' : '0',
     showRequester: options.showRequester ? '1' : '0', showTime: options.showTime ? '1' : '0', showSource: options.showSource ? '1' : '0',
     showRequesterAvatar: options.showRequesterAvatar ? '1' : '0', showRequesterBadge: options.showRequesterBadge ? '1' : '0',
     queuePop: options.queuePop ? '1' : '0', queuePopSeconds: String(options.queuePopSeconds),
@@ -185,7 +191,7 @@ export function createOverlaySearch(options: OverlayOptions): string {
     useMarquee: options.useMarquee ? '1' : '0', hideWhenIdle: options.hideWhenIdle ? '1' : '0', showLogo: options.showLogo ? '1' : '0', showBorder: options.showBorder ? '1' : '0',
     freePositioning: options.freePositioning ? '1' : '0', accent: normalizeAccent(options.accent), scale: String(options.scale), radius: String(options.radius),
     backgroundOpacity: String(options.backgroundOpacity), shadowStrength: String(options.shadowStrength), logoSize: String(options.logoSize),
-    fontStyle: options.fontStyle, fontFamily: options.fontFamily || '', textAlign: options.textAlign, artworkShape: options.artworkShape, animation: options.animation, progressStyle: options.progressStyle,
+    fontStyle: options.fontStyle, fontFamily: options.fontFamily || '', textAlign: options.textAlign, artworkShape: options.artworkShape, artworkScale: String(options.artworkScale ?? 100), animation: options.animation, progressStyle: options.progressStyle,
     backgroundImageUrl: options.backgroundImageUrl || '', logoImageUrl: options.logoImageUrl || '', customCss: options.customCss || '',
     posArtwork: positionString(options.positions.artwork), posText: positionString(options.positions.text), posMeta: positionString(options.positions.meta),
     posProgress: positionString(options.positions.progress), posLogo: positionString(options.positions.logo),
@@ -198,7 +204,7 @@ export function recommendedOverlaySize(layout: OverlayLayout, scale: number) {
     layout === 'banner' ? { width: 760, height: 120 } : layout === 'vertical' ? { width: 360, height: 520 } :
     layout === 'spotlight' ? { width: 420, height: 440 } : layout === 'textOnly' ? { width: 540, height: 110 } :
     // The cover card itself is at least 160px high; leave room for its shadow.
-    layout === 'coverCard' ? { width: 440, height: 180 } : { width: 560, height: 160 };
+    layout === 'ashen' ? { width: 640, height: 282 } : layout === 'coverCard' ? { width: 440, height: 180 } : { width: 560, height: 160 };
   const factor = scale / 100; return { width: Math.ceil(base.width * factor), height: Math.ceil(base.height * factor) };
 }
 

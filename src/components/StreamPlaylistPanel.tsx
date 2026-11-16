@@ -5,6 +5,7 @@ import { spotifyPlaylistUri } from '../spotifyPlaylist.ts';
 import { playlistSyncLabel } from '../playlistSync.ts';
 import { apiFetch } from '../apiClient.ts';
 import { useTranslations } from '../translations.ts';
+import { artworkUrl } from '../artworkUrl.ts';
 
 export function StreamPlaylistPanel({ config }: { config: BotConfig }) {
   const ui = (de: string, en: string) => config.language === 'de' ? de : en;
@@ -70,7 +71,7 @@ export function StreamPlaylistPanel({ config }: { config: BotConfig }) {
     {!items.length ? <p className="text-neutral-400">{t('streamPlaylistEmpty')}</p> : <div className="overflow-x-auto"><table className="w-full text-sm text-left text-neutral-300">
       <thead><tr><th>{t('streamPlaylistTrack')}</th><th>Provider</th><th>{t('streamPlaylistAddedBy')}</th><th>{t('streamPlaylistDate')}</th><th>Spotify</th><th /></tr></thead>
       <tbody>{items.map(item => <tr key={item.id} className="border-t border-neutral-800">
-        <td className="py-3"><div className="flex items-center gap-3">{item.albumArtUrl ? <img src={item.albumArtUrl} alt="" className="w-10 h-10 rounded object-cover" /> : <span aria-hidden="true" className="w-10 h-10 rounded bg-purple-950 flex items-center justify-center">♪</span>}<span><strong className="text-white">{item.title}</strong><br />{item.artist}</span></div></td>
+        <td className="py-3"><div className="flex items-center gap-3">{item.albumArtUrl ? <img src={artworkUrl(item.albumArtUrl) || item.albumArtUrl} alt="" referrerPolicy="no-referrer" className="w-10 h-10 rounded object-cover" /> : <span aria-hidden="true" className="w-10 h-10 rounded bg-purple-950 flex items-center justify-center">♪</span>}<span><strong className="text-white">{item.title}</strong><br />{item.artist}</span></div></td>
         <td><span className="rounded px-2 py-1 bg-neutral-800">{item.playbackProvider === 'spotify' ? 'Spotify' : item.playbackProvider === 'youtube_music' ? 'YouTube' : '—'}</span></td>
         <td>@{item.addedBy}</td><td>{new Date(item.addedAt).toLocaleString(config.language === 'de' ? 'de-DE' : 'en-GB')}</td>
         <td className="max-w-xs py-3"><span role="status">{playlistSyncLabel(item.spotifySync, config.language || 'en')}</span>

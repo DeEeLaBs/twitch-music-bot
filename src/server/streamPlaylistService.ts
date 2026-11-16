@@ -19,7 +19,7 @@ export interface StreamPlaylistEntry {
   url: string;
   videoId?: string;
   spotifyUri?: string;
-  playbackProvider: 'youtube_music' | 'spotify' | 'unknown';
+  playbackProvider: 'youtube_music' | 'spotify' | 'nectar' | 'unknown';
   albumArtUrl?: string;
   addedBy: string;
   addedAt: number;
@@ -91,7 +91,7 @@ export class StreamPlaylistService {
       return { success: false, error: 'Kein gültiger Song übergeben.' };
     }
 
-    const provider: 'youtube_music' | 'spotify' | 'unknown' =
+    const provider: 'youtube_music' | 'spotify' | 'nectar' | 'unknown' =
       track.playbackProvider ||
       (track.requestSource === 'spotify' || track.spotifyUri ? 'spotify' : 'youtube_music');
 

@@ -1,5 +1,7 @@
+import {applyChatDesignPreset, resetPlayerDesign} from '../overlayDesignPresets.ts';
+import { MAX_PLAYER_FONT_SIZE } from '../scene.ts';
 import { useState, type ReactNode } from 'react';
-import { BASIC_CHAT_MOTIONS, CHAT_ROLE_FILTERS, CREATIVE_CHAT_MOTIONS, type ChatMotion, type ChatStyle, type OverlayChatOptions } from '../overlayChat.ts';
+import { BASIC_CHAT_MOTIONS, CHAT_ROLE_FILTERS, chatMotionDuration, CREATIVE_CHAT_MOTIONS, type ChatMotion, type ChatStyle, type OverlayChatOptions } from '../overlayChat.ts';
 import {
   OVERLAY_ANIMATIONS, OVERLAY_ARTWORK_SHAPES, OVERLAY_LAYOUTS, OVERLAY_POP_ANIMATIONS, OVERLAY_POP_POSITIONS, OVERLAY_POP_STYLES, OVERLAY_PROGRESS_STYLES, OVERLAY_TEXT_ALIGNS, OVERLAY_THEMES, QUEUE_POP_PRESETS,
   type OverlayAnimation, type OverlayArtworkShape, type OverlayLayout, type OverlayOptions, type OverlayPopAnimation, type OverlayPopPosition, type OverlayPopStyle, type OverlayProgressStyle, type OverlayTextAlign, type OverlayTheme
@@ -16,6 +18,7 @@ const THEME_COLORS: Record<OverlayTheme, string> = {
   ocean: 'linear-gradient(135deg,#082f49,#22d3ee)',
   sunset: 'linear-gradient(135deg,#881337,#fb923c)',
   twitch: 'linear-gradient(135deg,#120c25,#9147ff)',
+  ashen: 'linear-gradient(135deg,#161311,#9d8050)',
   mono: 'linear-gradient(135deg,#fff 50%,#000 50%)'
 };
 
@@ -28,16 +31,19 @@ interface OverlayDesignMenuProps {
   language: 'de' | 'en';
   target: 'music-player' | 'twitch-chat';
   widgetCss: string;
+  widgetId: string;
   fontSize: number;
   onFontSize: (fontSize: number, history: boolean) => void;
   onEdit: (recipe: (current: OverlayOptions) => OverlayOptions, history: boolean) => void;
   onArm: () => void;
   onRelease: () => void;
   onWidgetCss: (css: string, history: boolean) => void;
+  onPreviewChatAnimation?: (direction:'in'|'out') => void;
+  onPreviewAnimation?: (kind: 'player' | 'popup') => void;
 }
 
 export function OverlayDesignMenu(props: OverlayDesignMenuProps) {
-  const { options, language, target, widgetCss, fontSize, onFontSize, onEdit, onArm, onRelease, onWidgetCss } = props;
+  const { options, language, target, widgetCss, widgetId, fontSize, onFontSize, onEdit, onArm, onRelease, onWidgetCss } = props;
   const ui = (de: string, en: string) => language === 'de' ? de : en;
   const sections = target === 'music-player' ? PLAYER_SECTIONS : CHAT_SECTIONS;
   const [section, setSection] = useState<DesignSection>('look');
@@ -67,11 +73,14 @@ export function OverlayDesignMenu(props: OverlayDesignMenuProps) {
           </button>
         ))}
       </div>
+      {active === 'look' && <button type="button" className="canvas-design-reset" onClick={() => onEdit(current => target === 'twitch-chat' ? applyChatDesignPreset(current,current.chat.style,widgetId) : resetPlayerDesign(current,widgetId),true)}>
+        {ui('Design auf Standardwerte zurücksetzen', 'Reset design to defaults')}
+      </button>}
       {target === 'music-player' && active === 'look' && (
         <div className="canvas-panel">
           <div className="canvas-swatches" role="radiogroup" aria-label={ui('Thema', 'Theme')}>
-            {OVERLAY_THEMES.map(theme => (
-              <button key={theme} type="button" role="radio" aria-checked={options.theme === theme} aria-label={theme} className={options.theme === theme ? 'is-active' : ''} style={{ background: THEME_COLORS[theme] }} onClick={() => set('theme', theme)} />
+            {OVERLAY_THEMES.filter(theme => theme !== 'ashen').map(theme => (
+              <button key={theme} type="button" role="radio" aria-checked={options.theme === theme} aria-label={theme} title={theme} className={options.theme === theme ? 'is-active' : ''} style={{ background: THEME_COLORS[theme] }} onClick={() => set('theme', theme)} />
             ))}
           </div>
           <Field label={ui('Layout', 'Layout')}>
@@ -93,21 +102,36 @@ export function OverlayDesignMenu(props: OverlayDesignMenuProps) {
         </div>
       )}
       {target === 'music-player' && active === 'content' && (
-        <div className="canvas-panel canvas-checks">
+        <div className="canvas-panel canvas-content-groups">
           {([
-            ['showArtwork', ui('Cover', 'Artwork')],
-            ['showProgress', ui('Fortschritt', 'Progress')],
-            ['showRequester', ui('Wunsch', 'Requester')],
-            ['showTime', ui('Zeit', 'Time')],
-            ['showSource', ui('Quelle', 'Source')],
-            ['showRequesterAvatar', ui('Avatar', 'Avatar')],
-            ['showRequesterBadge', ui('Badge', 'Badge')],
-            ['showBorder', ui('Rahmen', 'Border')],
-            ['useMarquee', ui('Laufschrift', 'Marquee')],
-            ['hideWhenIdle', ui('Bei Leerlauf aus', 'Hide when idle')],
-            ['showLogo', 'Logo']
-          ] as Array<[keyof OverlayOptions, string]>).map(([key, label]) => (
-            <label key={String(key)}><input type="checkbox" checked={Boolean(options[key])} onChange={event => set(key, event.target.checked as never)} /><span>{label}</span></label>
+            { title: ui('Song & Wiedergabe', 'Track & playback'), fields: [
+              ['showPlaybackStatus', ui('Status „Läuft gerade“', 'Playback status')],
+              ['showArtwork', ui('Cover', 'Artwork')],
+              ['showProgress', ui('Fortschritt', 'Progress')],
+              ['showTime', ui('Zeit', 'Time')]
+            ] },
+            { title: ui('Songwunsch & Zuschauer', 'Request & viewer'), fields: [
+              ['showRequester', ui('Wunsch', 'Requester')],
+              ['showSource', ui('Quelle', 'Source')],
+              ['showRequesterAvatar', ui('Avatar', 'Avatar')],
+              ['showRequesterBadge', ui('Badge', 'Badge')]
+            ] },
+            { title: ui('Anzeige & Verhalten', 'Appearance & behavior'), fields: [
+              ['showBorder', ui('Rahmen', 'Border')],
+              ['showLogo', 'Logo'],
+              ['useMarquee', ui('Laufschrift', 'Marquee')],
+              ['hideWhenIdle', ui('Bei Leerlauf aus', 'Hide when idle')]
+            ] }
+          ] as Array<{title: string; fields: Array<[keyof OverlayOptions, string]>}>).map(group => (
+            <fieldset key={group.title} className="canvas-content-group">
+              <legend>{group.title}</legend>
+              {group.fields.map(([key, label]) => (
+                <label key={String(key)} className="canvas-content-option">
+                  <span>{label}</span>
+                  <input type="checkbox" checked={Boolean(options[key])} onChange={event => set(key, event.target.checked as never)} />
+                </label>
+              ))}
+            </fieldset>
           ))}
         </div>
       )}
@@ -120,18 +144,24 @@ export function OverlayDesignMenu(props: OverlayDesignMenuProps) {
             onFamily={family => set('fontFamily', family)}
             onLibrary={(fonts, family) => saveFonts(fonts, family, 'player')}
           />
-          <Range label={ui('Schriftgröße', 'Font size')} min={12} max={32} value={fontSize} onArm={onArm} onRelease={onRelease} onChange={value => onFontSize(value, false)} />
+          <Range label={ui('Schriftgröße', 'Font size')} min={12} max={MAX_PLAYER_FONT_SIZE} value={fontSize} onArm={onArm} onRelease={onRelease} onChange={value => onFontSize(value, false)} />
           <Field label={ui('Ausrichtung', 'Alignment')}>
             <select value={options.textAlign} onChange={event => set('textAlign', event.target.value as OverlayTextAlign)}>{OVERLAY_TEXT_ALIGNS.map(id => <option key={id} value={id}>{id === 'left' ? ui('Links', 'Left') : ui('Mitte', 'Center')}</option>)}</select>
           </Field>
           <Field label="Cover">
             <select value={options.artworkShape} onChange={event => set('artworkShape', event.target.value as OverlayArtworkShape)}>{OVERLAY_ARTWORK_SHAPES.map(id => <option key={id} value={id}>{id}</option>)}</select>
           </Field>
+          {options.showArtwork && !['coverCard', 'textOnly'].includes(options.layout) && <>
+            <Range label={ui('Covergröße (%)', 'Cover size (%)')} min={50} max={200} value={options.artworkScale ?? 100} onArm={onArm} onRelease={onRelease} onChange={value => set('artworkScale', value, false)} />
+            <p className="text-xs text-zinc-400">{ui('100 % entspricht der Standardgröße. Die Playergröße bleibt gleich; das Cover wird auf den verfügbaren Platz begrenzt.', '100% is the default size. Player dimensions stay unchanged; the cover is limited to the available space.')}</p>
+          </>}
           <Field label={ui('Fortschritt', 'Progress')}>
             <select value={options.progressStyle} onChange={event => set('progressStyle', event.target.value as OverlayProgressStyle)}>{OVERLAY_PROGRESS_STYLES.map(id => <option key={id} value={id}>{id}</option>)}</select>
           </Field>
           <Field label={ui('Animation', 'Animation')}>
-            <select value={options.animation} onChange={event => set('animation', event.target.value as OverlayAnimation)}>{OVERLAY_ANIMATIONS.map(id => <option key={id} value={id}>{id}</option>)}</select>
+            <select value={options.animation} onChange={event => { set('animation', event.target.value as OverlayAnimation); props.onPreviewAnimation?.('player'); }}>
+              {OVERLAY_ANIMATIONS.map(id => <option key={id} value={id}>{id === 'ember' ? ui('Glut & Asche', 'Ember & ash') : id}</option>)}
+            </select>
           </Field>
           <Range label={ui('Ecken', 'Radius')} min={0} max={40} value={options.radius} onArm={onArm} onRelease={onRelease} onChange={value => set('radius', value, false)} />
           <Range label={ui('Deckkraft', 'Opacity')} min={25} max={100} value={options.backgroundOpacity} onArm={onArm} onRelease={onRelease} onChange={value => set('backgroundOpacity', value, false)} />
@@ -151,7 +181,7 @@ export function OverlayDesignMenu(props: OverlayDesignMenuProps) {
             </div>
             <Range label={ui('Dauer', 'Duration')} min={2} max={10} value={options.queuePopSeconds} onArm={onArm} onRelease={onRelease} onChange={value => set('queuePopSeconds', value, false)} />
             <Field label={ui('Animation', 'Animation')}>
-              <select value={options.queuePopAnimation} onChange={event => set('queuePopAnimation', event.target.value as OverlayPopAnimation)}>{OVERLAY_POP_ANIMATIONS.map(id => <option key={id} value={id}>{id}</option>)}</select>
+              <select value={options.queuePopAnimation} onChange={event => { set('queuePopAnimation', event.target.value as OverlayPopAnimation); props.onPreviewAnimation?.('popup'); }}>{OVERLAY_POP_ANIMATIONS.map(id => <option key={id} value={id}>{id}</option>)}</select>
             </Field>
             <Field label={ui('Position', 'Position')}>
               <select value={options.queuePopPosition} onChange={event => set('queuePopPosition', event.target.value as OverlayPopPosition)}>{OVERLAY_POP_POSITIONS.map(id => <option key={id} value={id}>{id}</option>)}</select>
@@ -166,7 +196,7 @@ export function OverlayDesignMenu(props: OverlayDesignMenuProps) {
       {target === 'twitch-chat' && active === 'look' && (
         <div className="canvas-panel">
           <Field label={ui('Stil', 'Style')}>
-            <select value={options.chat.style} onChange={event => setChat({ style: event.target.value as ChatStyle })}>
+            <select value={options.chat.style} onChange={event => { const style=event.target.value as ChatStyle; onEdit(current=>applyChatDesignPreset(current,style,widgetId),true); }}>
               {CHAT_STYLE_GROUPS.map(group => (
                 <optgroup key={group.en} label={ui(group.de, group.en)}>
                   {group.styles.map(style => <option key={style} value={style}>{styleLabel(style, ui)}</option>)}
@@ -174,15 +204,21 @@ export function OverlayDesignMenu(props: OverlayDesignMenuProps) {
               ))}
             </select>
           </Field>
+          {options.chat.style === 'ashen' && <p className="canvas-note">{ui('Ashen-Vorlage: Serifenschrift, goldene Namen, schwarze Nachrichten und die neueste Nachricht in Orange.', 'Ashen preset: serif type, gold names, black messages and the latest message in orange.')}</p>}
           <Field label={ui('Bewegung', 'Motion')}>
-            <MotionSelect value={options.chat.motion} ui={ui} onChange={motion => setChat({ motion })} />
+            <MotionSelect value={options.chat.motion} ui={ui} onChange={motion => {setChat({ motion });props.onPreviewChatAnimation?.('in');}} />
           </Field>
           <Field label={ui('Ausblendung', 'Fade out')}>
-            <MotionSelect value={options.chat.exitMotion} ui={ui} onChange={exitMotion => setChat({ exitMotion })} />
+            <MotionSelect value={options.chat.exitMotion} ui={ui} onChange={exitMotion => {setChat({ exitMotion });props.onPreviewChatAnimation?.('out');}} />
           </Field>
+          <div className="canvas-presets">
+            <button type="button" onClick={()=>props.onPreviewChatAnimation?.('in')}>{ui('Einblenden testen','Test entrance')}</button>
+            <button type="button" onClick={()=>props.onPreviewChatAnimation?.('out')}>{ui('Ausblenden testen','Test exit')}</button>
+          </div>
+          {(options.chat.motion === 'ember' || options.chat.exitMotion === 'ember') && <p className="canvas-note">{ui('Glut & Asche','Ember & ash')}: {chatMotionDuration(options.chat.motion,options.chat.fadeMs,'in')} ms / {chatMotionDuration(options.chat.exitMotion,options.chat.fadeMs,'out')} ms. {ui('„Fade“ steuert die Dauer.','Fade controls the duration.')}</p>}
           <AlertFontField
             language={language}
-            family={options.chat.fontFamily || 'Inter, sans-serif'}
+            family={options.chat.fontFamily || (options.chat.style === 'ashen' ? '"Times New Roman", Georgia, serif' : 'Inter, sans-serif')}
             fonts={options.alertBox.fonts}
             onFamily={family => setChat({ fontFamily: family })}
             onLibrary={(fonts, family) => saveFonts(fonts, family, 'chat')}
@@ -243,12 +279,14 @@ export function OverlayDesignMenu(props: OverlayDesignMenuProps) {
 
 const CHAT_STYLE_GROUPS: { de: string; en: string; styles: ChatStyle[] }[] = [
   { de: 'Basis', en: 'Basic', styles: ['classic', 'bubbles', 'stacked', 'inline', 'messenger', 'nametag'] },
+  { de: 'Inventar', en: 'Inventory', styles: ['ashen'] },
   { de: 'Retro', en: 'Retro', styles: ['terminal', 'bevel', 'handheld', 'arcade', 'y2k', 'receipt'] },
   { de: 'Neon', en: 'Neon', styles: ['neon', 'vapor', 'hud', 'gothic', 'gem'] },
   { de: 'Papier', en: 'Paper', styles: ['brutal', 'comic', 'note', 'sakura'] }
 ];
 
 const CHAT_STYLE_LABELS: Record<ChatStyle, { de: string; en: string }> = {
+  ashen: { de: 'Ashen – Inventar', en: 'Ashen – Inventory' },
   classic: { de: 'Zeile', en: 'Line' },
   bubbles: { de: 'Blasen', en: 'Bubbles' },
   stacked: { de: 'Zweizeilig', en: 'Stacked' },
@@ -304,7 +342,8 @@ function motionLabel(motion: ChatMotion, ui: (de: string, en: string) => string)
     shutter: ['Blende', 'Shutter'],
     tilt: ['Kippen', 'Tilt'],
     squash: ['Stauchen', 'Squash'],
-    flash: ['Aufblitzen', 'Flash']
+    flash: ['Aufblitzen', 'Flash'],
+    ember: ['Glut & Asche', 'Ember & ash']
   };
   return ui(...labels[motion]);
 }
@@ -322,7 +361,7 @@ function layoutLabel(layout: OverlayLayout, ui: (de: string, en: string) => stri
   const labels: Record<OverlayLayout, [string, string]> = {
     horizontal: ['Horizontal', 'Horizontal'], compact: ['Kompakt', 'Compact'], stacked: ['Gestapelt', 'Stacked'],
     banner: ['Banner', 'Banner'], vertical: ['Vertikal', 'Vertical'], spotlight: ['Spotlight', 'Spotlight'],
-    textOnly: ['Nur Text', 'Text only'], coverCard: ['Cover-Karte', 'Cover card']
+    ashen: ['Ashen – Inventar', 'Ashen – Inventory'], textOnly: ['Nur Text', 'Text only'], coverCard: ['Cover-Karte', 'Cover card']
   };
   return ui(...labels[layout]);
 }

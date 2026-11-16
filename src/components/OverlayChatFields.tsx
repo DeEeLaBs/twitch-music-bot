@@ -120,7 +120,8 @@ function motionLabel(motion: ChatMotion, de: boolean): string {
     shutter: ['Blende', 'Shutter'],
     tilt: ['Kippen', 'Tilt'],
     squash: ['Stauchen', 'Squash'],
-    flash: ['Aufblitzen', 'Flash']
+    flash: ['Aufblitzen', 'Flash'],
+    ember: ['Glut & Asche', 'Ember & ash']
   };
   return de ? labels[motion][0] : labels[motion][1];
 }

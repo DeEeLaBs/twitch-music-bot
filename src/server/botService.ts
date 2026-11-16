@@ -1,3 +1,5 @@
+import { nectarArtworkMatches } from '../nectarArtwork.ts';
+import {getGameService} from './gameService.ts';
 import './netDefaults.ts';
 import { GreetingRuntime, resolveGreetingUser } from './greetingRuntime.ts';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -25,6 +27,7 @@ import { getGlobalChatBadges } from './globalBadges.ts';
 import { getStreamerAvatar } from './streamerAvatarService.ts';
 import { StreamPlaylistService } from './streamPlaylistService.ts';
 import { getStreamStats, setStreamTimer, startStreamAlerts } from './alertService.ts';
+import { nectarBridge } from './nectarBridge.ts';
 import { getCountdownService, stopCountdownService } from './countdownService.ts';
 import { getCountdownDonations, stopCountdownDonations } from './countdownDonations.ts';
 
@@ -109,6 +112,16 @@ export class BotService {
       this.spotifyService.updateConfig(config.spotifyClientId || '', config.spotifyPreferredDeviceId || '');
       this.queueManager.updateConfig(config);
       this.twitchBot.updateConfig(config);
+      if (changedKeys.includes('nectarBridgeEnabled')) {
+        if (config.nectarBridgeEnabled !== false) {
+          nectarBridge.start();
+        } else {
+          nectarBridge.stop();
+        }
+      }
+      if (changedKeys.includes('playbackProvider')) {
+        nectarBridge.setActiveProvider(config.playbackProvider || 'spotify');
+      }
       if (changedKeys.some(key => ['channelPointsEnabled','channelPointsRewardId','twitchChannel','twitchBotOauthToken','twitchClientId'].includes(String(key)))) {
         void this.refreshChannelPointsValidation();
       }
@@ -121,6 +134,61 @@ export class BotService {
   }
 
   private initListeners() {
+    nectarBridge.setActiveProvider(this.config.playbackProvider || 'spotify');
+    nectarBridge.setTrackUrlResolver(async (title, artist, provider) => {
+      const query = [artist, title].filter(Boolean).join(' ').trim();
+      if (!query) return null;
+      if (provider === 'spotify') {
+        if (this.spotifyService.isConnected()) {
+          try {
+            const result = await this.spotifyService.searchTrack(query);
+            if (result?.url) return result.url;
+          } catch {
+            // fallback
+          }
+        }
+        return `https://open.spotify.com/search/${encodeURIComponent(query)}`;
+      } else {
+        try {
+          const match = await YouTubeResolver.resolveMatchingTrack({ title, artist });
+          if (match?.url) return match.url;
+        } catch {
+          // fallback
+        }
+        return `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
+      }
+    });
+
+    nectarBridge.setArtworkResolver(async (title, artist, album) => {
+      // Unknown artists need the multi-candidate album check in NectarBridge.
+      if (!artist.trim() || /^(unbekannter interpret|unknown artist)$/i.test(artist.trim())) return null;
+      const cleanArtist = artist.replace(/[,&/].*$/, '').replace(/\s+feat\..*$/i, '').trim();
+      const noParensTitle = title.replace(/\(.*?\)|\[.*?\]/g, '').trim();
+      const queries = Array.from(new Set([
+        [artist, title].filter(Boolean).join(' '),
+        [cleanArtist, noParensTitle].filter(Boolean).join(' '),
+        [artist, album].filter(Boolean).join(' ')
+      ])).filter(Boolean);
+
+      if (this.spotifyService.isConnected()) {
+        for (const q of queries) {
+          try {
+            const track = await this.spotifyService.searchTrack(q);
+            if (track?.thumbnailUrl && nectarArtworkMatches(title, artist, album, track)) return track.thumbnailUrl;
+          } catch {}
+        }
+      }
+
+      {
+        try {
+          const match = await YouTubeResolver.resolveMatchingTrack({ title: noParensTitle || title, artist: cleanArtist || artist });
+          if (match?.thumbnailUrl && nectarArtworkMatches(title, artist, album, match)) return match.thumbnailUrl;
+        } catch {}
+      }
+
+      return null;
+    });
+
     botEvents.on('chat:message', line => {
       this.chatLog = pushChatLine(this.chatLog, line).slice(-50);
       this.sendChat({ type: 'chat', data: line });
@@ -271,6 +339,7 @@ export class BotService {
       if (profile.finish.chatEnabled && profile.finish.chatMessage) this.twitchBot.sendMessage(profile.finish.chatMessage);
     });
     getCountdownDonations().start();
+    getGameService().startRuntime(text=>{if(!this.twitchBot.getIsConnected())throw Error('Chat offline');this.twitchBot.sendMessage(text);});
     (this.greetings ??= new GreetingRuntime(() => this.config,undefined,undefined,text=>{
       if(!this.twitchBot.getIsConnected())throw new Error('Twitch-Chat nicht verbunden.');
       this.twitchBot.sendMessage(text);
@@ -288,6 +357,9 @@ export class BotService {
     // manually started tracks and persisted requests are detected immediately.
     this.ytmCompanion.start();
     this.spotifyService.start();
+    if (this.config.nectarBridgeEnabled !== false) {
+      nectarBridge.start();
+    }
   }
 
   private addLog(log: BotLog, category: BotLog['category'] = log.category || 'BOT') {
@@ -632,10 +704,12 @@ export class BotService {
   }
 
   public shutdown() {
+    getGameService().stopRuntime();
     this.greetings?.stop();
     stopCountdownService();
     stopCountdownDonations();
     this.configService.save();
+    nectarBridge.stop();
     this.spotifyService.stop();
     if (this.twitchRefreshTimer) clearInterval(this.twitchRefreshTimer);
     if(this.rewardValidationTimer) clearInterval(this.rewardValidationTimer);

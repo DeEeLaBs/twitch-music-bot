@@ -886,6 +886,8 @@ export function StreamWidgetMenu({
       {(widget.type === 'image' || widget.type === 'video') && (
         <MediaFields kind={widget.type} variant={widget.variant} language={language} onVariant={onVariant} />
       )}
+      {widget.type === 'games' && <p>{ui('Spiele und Inhalte im Menü Chat-Spiele verwalten. Alle OBS-Quellen zeigen dieselbe Runde. Die Vorschau startet kein Spiel.', 'Manage games and content in Chat Games. All OBS sources show the same round. Preview never starts a game.')}</p>}
+      {widget.type === 'wheel' && <p>{ui('Felder und Drehungen im Menü Glücksrad steuern. Alle Overlays zeigen dasselbe Rad. Diese Vorschau startet keine Auslosung.', 'Configure fields and spins in Spin the Wheel. All overlays share one wheel. This preview does not draw a winner.')}</p>}
       {widget.type === 'greeting' && <p>{ui('Personen, GIFs und Sounds im Menü Begrüßungen konfigurieren und dieses Overlay als Ausgabe wählen. Auch reiner Sound benötigt eine aktive OBS-Browserquelle.', 'Configure people, GIFs and sounds in Greetings and select this overlay as output. Sound-only greetings also require an active OBS browser source.')}</p>}
       {widget.type === 'alert' && <p>{ui('Folgt, Abos, Bits und Raids. Der Song-Hinweis wird zuerst gezeigt.', 'Follows, subs, bits, and raids. The song notice finishes first.')}</p>}
       {widget.type === 'fx' && <FxFields variant={widget.variant} language={language} onVariant={onVariant} />}

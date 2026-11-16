@@ -1,3 +1,5 @@
+import {GameChat} from './gameChat.ts';
+import {getGameService} from './gameService.ts';
 import WebSocket from 'ws';
 import type { BadgeType, BotConfig, BotLog, Requester, Track } from '../types.ts';
 import { QueueManager } from './queueManager.ts';
@@ -16,6 +18,7 @@ import { getCountdownService } from './countdownService.ts';
 export type LogCallback = (log: BotLog) => void;
 
 export class TwitchBot {
+  private gameChat:GameChat|undefined;
   private redemptionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private config: BotConfig;
   private queueManager: QueueManager;
@@ -332,6 +335,18 @@ export class TwitchBot {
       badge,
       color: tags['color'] || '#9146FF'
     };
+
+    const gameCommand=parseCommand(messageBody);
+    if(gameCommand && ['game','play','points'].includes(gameCommand.definition.name)) {
+      if(tags['custom-reward-id'])return;
+      if(this.canUse(gameCommand.definition.name,badge)) (this.gameChat??=new GameChat(getGameService())).receive(messageBody,{
+        id:tags.id||'',userId:tags['user-id']||'',name:requester.displayName,
+        channel:/ PRIVMSG #([^ ]+) :/.exec(line)?.[1]||'',expectedChannel:this.config.twitchChannel,
+        role:badge,at:Number(tags['tmi-sent-ts']),own:sender.toLowerCase()===this.config.twitchBotUsername.toLowerCase()&&sender.toLowerCase()!==this.config.twitchChannel.toLowerCase().replace(/^#/,''),
+        shared:!!tags['source-room-id']&&tags['source-room-id']!==tags['room-id']
+      });
+      return;
+    }
 
     const customRewardId = tags['custom-reward-id'];
     const isReward = Boolean(
@@ -695,7 +710,7 @@ export class TwitchBot {
     this.requestTimes.set(user, now);
 
     for (const [name, time] of this.requestTimes) {
-      if (now - time > 60000) {
+      if (now - time >= perUser) {
         this.requestTimes.delete(name);
       }
     }
@@ -706,7 +721,7 @@ export class TwitchBot {
       const resolved = await resolveForPlaybackProvider(query, this.config, this.queueManager.spotifyService);
       if (provider !== this.config.playbackProvider) throw new ResolverError('NO_RESULTS', 'Der Player wurde während der Suche gewechselt. Bitte Song erneut anfragen.');
 
-      const addResult = this.queueManager.addSong(resolved, requester);
+      const addResult = this.queueManager.addSong(resolved, requester, redemptionInfo);
       if (!addResult.success) {
         const errorReason = addResult.error || 'Song abgelehnt';
         if (!await refundIfRedemption(errorReason)) {
@@ -719,8 +734,6 @@ export class TwitchBot {
       // Keep redemptions cancellable during the withdrawal window.
       if (redemptionInfo?.rewardId && addResult.track) {
         const track = addResult.track;
-        track.rewardId = redemptionInfo.rewardId; track.redemptionId = redemptionInfo.redemptionId;
-        this.queueManager.persistRedemptionMetadata();
         this.scheduleRedemption(track);
       }
 
@@ -762,7 +775,7 @@ export class TwitchBot {
 
     if (playback.currentSong) {
       const song = playback.currentSong;
-      const reqInfo = song.requester.username.toLowerCase() !== 'radio'
+      const reqInfo = !song.id.startsWith('nectar-') && song.requester.username.toLowerCase() !== 'radio'
         ? this.t('npReqBy', { user: song.requester.displayName })
         : '';
       this.sendMessage(this.t('npPlaying', { title: song.title, artist: song.artist, reqInfo, url: song.url }));

@@ -30,10 +30,11 @@ export function createPlaybackRoutes() {
   router.post('/playback/skip', asyncRoute(async(req,res)=>{
     const manager = botService.getQueueManager();
     const result = await manager.skipCurrent(req.body?.user || 'Streamer');
+    const isNectar = Boolean(manager.getPlaybackState().currentSong?.id?.startsWith('nectar-'));
     const spotify = botService.getFullState().config.playbackProvider === 'spotify';
     res.json({ ...result,
-      isConnected: spotify ? botService.getSpotifyService().isConnected() : botService.getYtmCompanion().getIsConnected(),
-      error: result.success ? undefined : manager.getPlaybackState().error || (spotify ? 'Spotify Skip fehlgeschlagen.' : botService.getYtmCompanion().getLastCommandError())
+      isConnected: isNectar ? manager.nectarPlugin.isReady() : (spotify ? botService.getSpotifyService().isConnected() : botService.getYtmCompanion().getIsConnected()),
+      error: result.success ? undefined : manager.getPlaybackState().error || (isNectar ? 'NectarLink Skip fehlgeschlagen.' : (spotify ? 'Spotify Skip fehlgeschlagen.' : botService.getYtmCompanion().getLastCommandError()))
     });
   }));
   router.post('/playback/previous', asyncRoute(async(_req,res)=>{ const success=await botService.getQueueManager().previousTrack(); res.json({success,error:botService.getQueueManager().getPlaybackState().error}); }));

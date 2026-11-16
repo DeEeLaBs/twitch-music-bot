@@ -1,7 +1,9 @@
 import type { OverlayChatOptions } from './overlayChat.ts';
 
+export const MAX_PLAYER_FONT_SIZE = 96;
+
 export const SCENE_VERSION = 1 as const;
-export const SCENE_WIDGET_TYPES = ['twitch-chat', 'music-player', 'alert', 'label', 'goal', 'leaderboard', 'countdown', 'greeting', 'text', 'image', 'video', 'fx'] as const;
+export const SCENE_WIDGET_TYPES = ['twitch-chat', 'music-player', 'alert', 'label', 'goal', 'leaderboard', 'countdown', 'games', 'wheel', 'greeting', 'text', 'image', 'video', 'fx'] as const;
 export type SceneWidgetType = typeof SCENE_WIDGET_TYPES[number];
 export type ResizeHandle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
@@ -50,6 +52,8 @@ const MIN_FRAME: Record<SceneWidgetType, { width: number; height: number }> = {
   goal: { width: 220, height: 56 },
   leaderboard: { width: 220, height: 140 },
   countdown: { width: 160, height: 72 },
+  games: { width: 280, height: 200 },
+  wheel: { width: 200, height: 230 },
   greeting: { width: 80, height: 80 },
   text: { width: 120, height: 48 },
   image: { width: 80, height: 80 },
@@ -65,6 +69,8 @@ const DEFAULT_FONT: Record<SceneWidgetType, number> = {
   goal: 18,
   leaderboard: 16,
   countdown: 28,
+  games: 20,
+  wheel: 18,
   greeting: 18,
   text: 28,
   image: 14,
@@ -80,6 +86,8 @@ const WIDGET_IDS: Record<SceneWidgetType, string> = {
   goal: 'w_goal',
   leaderboard: 'w_board',
   countdown: 'w_timer',
+  games: 'w_games',
+  wheel: 'w_wheel',
   greeting: 'w_greeting',
   text: 'w_text',
   image: 'w_image',
@@ -167,7 +175,7 @@ function widgetFromUnknown(value: unknown, design: { width: number; height: numb
       z: Number(frame.z)
     }, type, design),
     css: String(raw.css || '').slice(0, 2000),
-    fontSize: clamp(Number(raw.fontSize), 12, 32, DEFAULT_FONT[type]),
+    fontSize: clamp(Number(raw.fontSize), 12, type === 'music-player' ? MAX_PLAYER_FONT_SIZE : 32, DEFAULT_FONT[type]),
     fontFamily: String(raw.fontFamily || '').slice(0, 120),
     fadeMs: clamp(round(Number(raw.fadeMs)), 0, 1000, type === 'music-player' ? 350 : 180),
     variant: String(raw.variant || '').slice(0, 500),
@@ -447,6 +455,8 @@ export function defaultFrame(type: SceneWidgetType, design: { width: number; hei
     goal: { width: 480, height: 88, x: 48, y: 136 },
     leaderboard: { width: 360, height: 280, x: 48, y: 240 },
     countdown: { width: 280, height: 120, x: design.width - 328, y: design.height - 168 },
+    games: { width: 640, height: 560, x: 100, y: 100 },
+    wheel: { width: 480, height: 552, x: 200, y: 100 },
     greeting: { width: 360, height: 300, x: (design.width - 360) / 2, y: (design.height - 300) / 2 },
     text: { width: 640, height: 140, x: (design.width - 640) / 2, y: (design.height - 140) / 2 },
     image: { width: 320, height: 180, x: design.width - 368, y: 48 },
@@ -487,7 +497,7 @@ export function updateWidget(scene: OverlayScene, id: string, patch: Partial<Sce
       next.frame = clampFrame(next.frame, next.type, scene.design);
       next.css = String(next.css || '').slice(0, 2000);
       next.variant = String(next.variant || '').slice(0, 500);
-      next.fontSize = clamp(round(next.fontSize), 12, 32, widget.fontSize);
+      next.fontSize = clamp(round(next.fontSize), 12, widget.type === 'music-player' ? MAX_PLAYER_FONT_SIZE : 32, widget.fontSize);
       next.fontFamily = String(next.fontFamily || '').slice(0, 120);
       next.fadeMs = clamp(round(next.fadeMs), 0, 1000, widget.fadeMs);
       next.visible = next.visible !== false;

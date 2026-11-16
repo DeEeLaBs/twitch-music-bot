@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bell, Copy, Eye, EyeOff, Grid3x3, Image as ImageIcon, ListOrdered, Maximize2, MessageSquare, Music2, Plus, Redo2, Sparkles, Tag, Target, Timer, Trash2, Type, Undo2, Video, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { Bell, Copy, Eye, EyeOff, Grid3x3, Image as ImageIcon, ListOrdered, Maximize2, MessageSquare, Music2, Plus, Radio, Redo2, Sparkles, Tag, Target, Timer, Trash2, Type, Undo2, Video, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
 import { OverlayAutosave, type AutosaveStatus } from '../overlayAutosave.ts';
 import { OverlayCollection, overlayRequest, type OverlayDocument } from './OverlayCollection.tsx';
 import { OverlayDesignMenu } from './OverlayDesignMenu.tsx';
@@ -113,6 +113,8 @@ const WIDGET_CHOICES: Array<{ type: SceneWidgetType; de: string; en: string; ico
   { type: 'label', de: 'Label', en: 'Label', icon: Tag },
   { type: 'goal', de: 'Ziel', en: 'Goal', icon: Target },
   { type: 'leaderboard', de: 'Rangliste', en: 'Leaderboard', icon: ListOrdered },
+  { type: 'games', de: 'Chat-Spiele', en: 'Chat Games', icon: Bell },
+  { type: 'wheel', de: 'Glücksrad', en: 'Spin the Wheel', icon: Bell },
   { type: 'greeting', de: 'Begrüßungen', en: 'Greetings', icon: Bell },
   { type: 'countdown', de: 'Countdown', en: 'Countdown', icon: Timer },
   { type: 'text', de: 'Text', en: 'Text', icon: Type },
@@ -123,7 +125,7 @@ const WIDGET_CHOICES: Array<{ type: SceneWidgetType; de: string; en: string; ico
 
 const WIDGET_GROUPS: Array<{ de: string; en: string; types: SceneWidgetType[] }> = [
   { de: 'Stream', en: 'Stream', types: ['music-player', 'twitch-chat'] },
-  { de: 'Alerts', en: 'Alerts', types: ['alert', 'fx', 'greeting'] },
+  { de: 'Alerts', en: 'Alerts', types: ['alert', 'fx', 'greeting', 'wheel', 'games'] },
   { de: 'Ziele', en: 'Goals', types: ['label', 'goal', 'leaderboard', 'countdown'] },
   { de: 'Medien', en: 'Media', types: ['text', 'image', 'video'] }
 ];
@@ -151,10 +153,16 @@ function OverlayCanvasEditor({ playback, language = 'de', embedded = false, docu
   const [alertClipId, setAlertClipId] = useState('');
   const [zoom, setZoom] = useState(1);
   const [snap, setSnap] = useState(true);
-  const emulate = true;
+  const [liveMode, setLiveMode] = useState(false);
   const [muted, setMuted] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [simulateOpen, setSimulateOpen] = useState(false);
+  const [animationPreview, setAnimationPreview] = useState({ id: 0, popup: false });
+  useEffect(() => {
+    if (!animationPreview.popup) return;
+    const frame = window.requestAnimationFrame(() => sendSongSample(language));
+    return () => window.cancelAnimationFrame(frame);
+  }, [animationPreview, language]);
   const [creatorOpen, setCreatorOpen] = useState(false);
   const [customSize, setCustomSize] = useState(() => ({ width: String(overlayDocument.options.scene?.design.width ?? 1920), height: String(overlayDocument.options.scene?.design.height ?? 1080) }));
   const [notice, setNotice] = useState('');
@@ -365,7 +373,7 @@ function OverlayCanvasEditor({ playback, language = 'de', embedded = false, docu
     window.setTimeout(() => setNotice(''), 2000);
   };
 
-  const previewPlayback = emulate || !playback?.currentSong ? SAMPLE_PLAYBACK : playback;
+  const previewPlayback = liveMode ? (playback || SAMPLE_PLAYBACK) : SAMPLE_PLAYBACK;
   const widgetLabel = (type: SceneWidgetType) => {
     const choice = WIDGET_CHOICES.find(item => item.type === type);
     return choice ? ui(choice.de, choice.en) : type;
@@ -376,6 +384,7 @@ function OverlayCanvasEditor({ playback, language = 'de', embedded = false, docu
       language={language}
       target={selected.type}
       widgetCss={selected.css}
+      widgetId={selected.id}
       fontSize={selected.fontSize}
       onFontSize={(fontSize, history) => {
         const current = optionsRef.current;
@@ -386,6 +395,8 @@ function OverlayCanvasEditor({ playback, language = 'de', embedded = false, docu
       onArm={snapshot}
       onRelease={() => { armed.current = false; }}
       onWidgetCss={editWidgetCss}
+      onPreviewChatAnimation={direction => window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('overlay:chat-motion-preview',{detail:{direction}})))}
+      onPreviewAnimation={kind => setAnimationPreview(current => ({id: current.id + 1, popup: kind === 'popup'}))}
     />
   ) : selected?.type === 'alert' ? (
     <div><button type="button" onClick={() => void importCreatorAlerts()}>{ui('Aus Alert-Designer importieren', 'Import from alert designer')}</button>
@@ -503,12 +514,13 @@ function OverlayCanvasEditor({ playback, language = 'de', embedded = false, docu
             playback={muted ? { ...previewPlayback, volume: 0 } : previewPlayback}
             language={language}
             token={token}
-            preview={emulate}
+            preview={!liveMode}
             muted={muted}
             interactive
             snap={snap}
             zoom={zoom}
             selectedId={selectedId}
+            playerPreviewKey={animationPreview.id}
             alertClipId={importedClipId}
             onSelect={selectWidget}
             onGestureStart={() => { dragging.current = true; gestureScene.current = JSON.stringify(optionsRef.current.scene); snapshot(); }}
@@ -526,9 +538,10 @@ function OverlayCanvasEditor({ playback, language = 'de', embedded = false, docu
             onPlace={(type, at) => addWidget(type, at)}
           />
         </div>
-        <div className="canvas-float canvas-toolbar" role="toolbar" aria-label={ui('Editorwerkzeuge', 'Editor tools')}>
+        <div className="canvas-toolbar" role="toolbar" aria-label={ui('Editorwerkzeuge', 'Editor tools')}>
           <div className="canvas-simulate" ref={simulateRef}>
-            <button type="button" className="canvas-emulate" aria-expanded={simulateOpen} aria-haspopup="menu" onClick={() => { setResolutionOpen(false); setCreatorOpen(false); setSimulateOpen(open => !open); }}><Bell aria-hidden="true" />{ui('Emulieren', 'Emulate')}</button>
+            <button type="button" className={'canvas-emulate ' + (liveMode ? 'is-live-active' : '')} onClick={() => setLiveMode(v => !v)} title={liveMode ? ui('Live-Modus aktiv: Zeigt echten Player', 'Live mode active: Showing real player') : ui('Muster-Modus aktiv: Zeigt Beispieldaten', 'Sample mode active: Showing sample data')}><Radio aria-hidden="true" />{liveMode ? ui('Live', 'Live') : ui('Muster', 'Sample')}</button>
+          <button type="button" className="canvas-emulate" aria-expanded={simulateOpen} aria-haspopup="menu" onClick={() => { setResolutionOpen(false); setCreatorOpen(false); setSimulateOpen(open => !open); }}><Bell aria-hidden="true" />{ui('Emulieren', 'Emulate')}</button>
             {simulateOpen && (
               <div className="canvas-simulate-menu" role="menu">
                 <p>{ui('Chat', 'Chat')}</p>
@@ -545,12 +558,12 @@ function OverlayCanvasEditor({ playback, language = 'de', embedded = false, docu
           </div>
           <button type="button" onClick={undo} aria-label={ui('Rückgängig', 'Undo')} title={ui('Rückgängig (Strg+Z)', 'Undo (Ctrl+Z)')}><Undo2 aria-hidden="true" /></button>
           <button type="button" onClick={redo} aria-label={ui('Wiederholen', 'Redo')} title={ui('Wiederholen (Strg+Y)', 'Redo (Ctrl+Y)')}><Redo2 aria-hidden="true" /></button>
-          <span className="canvas-float-gap" />
+          <span className="canvas-toolbar-separator" />
           <button type="button" onClick={() => setZoom(value => Math.max(0.25, Math.round((value - 0.25) * 100) / 100))} aria-label={ui('Verkleinern', 'Zoom out')}><ZoomOut aria-hidden="true" /></button>
           <button type="button" className="canvas-zoom" onClick={() => setZoom(1)} aria-label={ui('Zoom zurücksetzen', 'Reset zoom')} title={ui('Zoom zurücksetzen (Alt+X)', 'Reset zoom (Alt+X)')}>{Math.round(zoom * 100)}%</button>
           <button type="button" onClick={() => setZoom(value => Math.min(2, Math.round((value + 0.25) * 100) / 100))} aria-label={ui('Vergrößern', 'Zoom in')}><ZoomIn aria-hidden="true" /></button>
           <button type="button" onClick={() => setZoom(1)} aria-label={ui('An Bildschirm anpassen', 'Fit to screen')} title={ui('An Bildschirm anpassen (Alt+F)', 'Fit to screen (Alt+F)')}><Maximize2 aria-hidden="true" /></button>
-          <span className="canvas-float-gap" />
+          <span className="canvas-toolbar-separator" />
           <button type="button" aria-pressed={snap} onClick={() => setSnap(value => !value)} aria-label={ui('Einrasten', 'Snapping')} title={snap ? ui('Einrasten: an', 'Snapping: on') : ui('Einrasten: aus', 'Snapping: off')}><Grid3x3 aria-hidden="true" /></button>
           <button type="button" aria-pressed={muted} onClick={() => setMuted(value => !value)} aria-label={muted ? ui('Ton an', 'Unmute') : ui('Stumm', 'Mute')}>{muted ? <VolumeX aria-hidden="true" /> : <Volume2 aria-hidden="true" />}</button>
         </div>

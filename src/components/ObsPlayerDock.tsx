@@ -15,6 +15,7 @@ import { apiFetch } from '../apiClient.ts';
 import type { DockOptions } from '../dockOptions.ts';
 import { DEFAULT_DOCK_OPTIONS } from '../dockOptions.ts';
 import type { PlaybackState, Track } from '../types.ts';
+import { artworkUrl } from '../artworkUrl.ts';
 
 type Props = {
   playback?: PlaybackState | null;
@@ -23,11 +24,14 @@ type Props = {
   interactive?: boolean;
   options?: Partial<DockOptions>;
   connectionLost?: boolean;
-  player?: 'youtube_music' | 'spotify';
+  player?: 'youtube_music' | 'spotify' | 'nectar';
   playerConnected?: boolean;
 };
 
-function idlePlayerMessage(language: 'de' | 'en', player: 'youtube_music' | 'spotify', connected: boolean) {
+function idlePlayerMessage(language: 'de' | 'en', player: 'youtube_music' | 'spotify' | 'nectar', connected: boolean) {
+  if (player === 'nectar') {
+    return language === 'de' ? 'NectarLink (Smartphone)' : 'NectarLink (Phone)';
+  }
   const name = player === 'spotify' ? 'Spotify' : 'YouTube Music';
   if (!connected) return language === 'de' ? `${name} ist nicht verbunden` : `${name} is not connected`;
   return language === 'de' ? `Warte auf ${name} …` : `Waiting for ${name} …`;
@@ -217,7 +221,7 @@ export function ObsPlayerDock({ playback, queue = [], language = 'de', interacti
 
         <div className="obs-player-song" title={`${title} — ${artist}`}>
           {settings.showCover && <div className="obs-player-cover">
-            {song?.albumArtUrl ? <img src={song.albumArtUrl} alt="" /> : <div className="obs-player-cover-placeholder"><ListMusic /></div>}
+            {song?.albumArtUrl ? <img src={artworkUrl(song.albumArtUrl) || song.albumArtUrl} alt="" referrerPolicy="no-referrer" /> : <div className="obs-player-cover-placeholder"><ListMusic /></div>}
           </div>}
           <div className="obs-player-copy">
             <strong>
@@ -286,7 +290,7 @@ export function ObsPlayerDock({ playback, queue = [], language = 'de', interacti
             <div className="obs-player-queue-item" key={track.id} title={`${track.title} — ${track.artist}`}>
               <span className="obs-player-queue-index">{index + 1}</span>
               <div className="obs-player-queue-art">
-                {track.albumArtUrl ? <img src={track.albumArtUrl} alt="" /> : <ListMusic />}
+                {track.albumArtUrl ? <img src={artworkUrl(track.albumArtUrl) || track.albumArtUrl} alt="" referrerPolicy="no-referrer" /> : <ListMusic />}
               </div>
               <div className="obs-player-queue-copy">
                 <strong>{track.title}</strong>

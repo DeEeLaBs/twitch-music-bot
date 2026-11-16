@@ -45,7 +45,7 @@ export const DiagnosticsPanel: React.FC<{ language: 'de' | 'en' }> = ({ language
   return <div className="space-y-4">
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-2"><Activity className="w-5 h-5 text-purple-400"/><h2 className="font-bold text-neutral-100">{en ? 'System diagnostics' : 'Systemdiagnose'}</h2></div>
-      <div className="flex gap-2"><a href="/api/diagnostics/export" className="inline-flex items-center gap-2 rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800"><Download className="w-4 h-4" />{en ? 'Export' : 'Exportieren'}</a><button type="button" onClick={() => void refresh()} className="inline-flex items-center gap-2 rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800">
+      <div className="flex flex-wrap gap-2"><a href="/api/diagnostics/export" className="inline-flex items-center gap-2 rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800"><Download className="w-4 h-4" />{en ? 'Export' : 'Exportieren'}</a><button type="button" onClick={() => void refresh()} className="inline-flex items-center gap-2 rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800">
         <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`}/>{en ? 'Refresh' : 'Aktualisieren'}
       </button></div>
     </div>

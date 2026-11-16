@@ -3,3 +3,4 @@ export * from './youtubeMusicPlugin.ts';
 export * from './spotifyPlugin.ts';
 export * from './pluginRegistry.ts';
 
+export * from './nectarPlugin.ts';

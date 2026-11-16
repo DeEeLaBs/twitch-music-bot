@@ -62,6 +62,33 @@ test('pending request ignores stale track updates and concurrent next calls', as
  p.emit('abcdefghijk'); await first;
  assert.equal(q.getCurrentTrack()?.videoId, 'abcdefghijk'); assert.equal(q.getQueue().length, 1);
 });
+test('failed request persistence rejects the addition and permits a clean retry with its redemption', () => {
+ const q = new QueueManager(config, new Player() as any);
+ (q as any).playbackError = 'Paused for test';
+ const persistence = (q as any).persistence;
+ const save = persistence.saveQueue.bind(persistence);
+ persistence.saveQueue = () => { throw Error('write failed'); };
+ assert.equal(q.addSong(track(), viewer).success, false);
+ assert.equal(q.getQueue().length, 0);
+ persistence.saveQueue = save;
+ assert.equal(q.addSong(track(), viewer, {rewardId:'reward', redemptionId:'redemption'}).success, true);
+ const saved = JSON.parse(fs.readFileSync('data/queue.json', 'utf8'));
+ assert.equal(saved.queue.length, 1);
+ assert.equal(saved.queue[0].redemptionId, 'redemption');
+});
+
+test('a failed write before playback keeps the request queued for retry', async () => {
+ const player = new Player();
+ const q = new QueueManager(config, player as any);
+ const added = q.addSong(track(), viewer);
+ assert.equal(added.success, true);
+ (q as any).persistence.saveQueue = () => { throw Error('disk full'); };
+ assert.equal(await q.playNext(), null);
+ assert.equal(player.calls.length, 0);
+ assert.equal(q.getQueue()[0].id, added.track?.id);
+ assert.equal(q.getCurrentTrack(), null);
+});
+
 test('failed command preserves request and exposes failure', async () => {
  const p = new Player(); p.accept = false; const q = new QueueManager(config, p as any);
  q.addSong(track(), viewer); await q.playNext();

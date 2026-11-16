@@ -33,6 +33,8 @@ function defaultConfig(): BotConfig { return {
   preventRecentDuplicates: 10,
   voteSkipThreshold: 3,
   autoPlayRadio: true,
+  nectarBridgeEnabled: true,
+  nectarPauseOnRequest: true,
   songRequestsOpen: true,
   streamPlaylistUrl: '',
   nowPlayingCooldownSeconds: 15,

@@ -1,3 +1,7 @@
+import {createGameRoutes,createGameOutputRoutes} from './routes/gameRoutes.ts';
+import type {GameService} from './gameService.ts';
+import type {WheelService} from './wheelService.ts';
+import {createWheelRoutes,createWheelOutputRoutes} from './routes/wheelRoutes.ts';
 import { Router } from 'express';
 import type { GreetingService } from './greetingService.ts';
 import { createGreetingRoutes, createGreetingOutputRoutes } from './routes/greetingRoutes.ts';
@@ -11,7 +15,7 @@ import { createStreamDeckRoutes } from './routes/streamDeckRoutes.ts';
 import { BotError } from './errors.ts';
 import { createCountdownRoutes } from './routes/countdownRoutes.ts';
 
-export function createApiRouter(options:{sessionToken:string;appVersion:string;overlayAssetsDir:string;greetings?:GreetingService}) {
+export function createApiRouter(options:{sessionToken:string;appVersion:string;overlayAssetsDir:string;greetings?:GreetingService;wheel?:WheelService;games?:GameService}) {
   const api=Router();
   let requestsInFlight=0;
   api.use((_req, res, next) => {
@@ -29,10 +33,12 @@ export function createApiRouter(options:{sessionToken:string;appVersion:string;o
     next();
   });
 
+  api.use(createGameOutputRoutes(options.games));
+  api.use(createWheelOutputRoutes(options.wheel));
   api.use(createGreetingOutputRoutes(options.greetings));
 
   api.use((req,_res,next)=>{
-    if(['GET','HEAD','OPTIONS'].includes(req.method)) return next();
+    if(['GET','HEAD','OPTIONS'].includes(req.method) && req.path !== '/nectar/poll-commands') return next();
     if(req.headers['x-bot-session']!==options.sessionToken){ next(new BotError('AUTH_REQUIRED','Ungültige lokale Sitzung. Oberfläche neu laden.',403)); return; }
     next();
   });
@@ -45,6 +51,8 @@ export function createApiRouter(options:{sessionToken:string;appVersion:string;o
   api.use(createQueueRoutes());
   api.use(createStreamDeckRoutes());
   api.use(createCountdownRoutes());
+  api.use(createWheelRoutes(options.wheel));
+  api.use(createGameRoutes(options.games));
   api.use(createGreetingRoutes(options.overlayAssetsDir,options.greetings));
   return api;
 }

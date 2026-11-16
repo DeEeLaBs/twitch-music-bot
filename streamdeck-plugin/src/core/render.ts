@@ -92,6 +92,11 @@ interface Look { icon?: string; label: string; accent: string; sub?: string; cus
 function look(id: string, state: BotState, ctx: RenderContext): Look {
   const { playback, queue, config } = state;
   switch (id) {
+    case 'game-start-quiz': return { icon: 'note', label: 'Quiz', accent: PURPLE };
+    case 'game-start-number': return { icon: 'note', label: 'Zahl', accent: GREEN };
+    case 'game-start-word': return { icon: 'note', label: 'Wort', accent: AMBER };
+    case 'game-start-adventure': return { icon: 'note', label: 'Abenteuer', accent: PURPLE };
+    case 'game-finish': return { icon: 'alert', label: 'Spiel Ende', accent: AMBER };
     case 'play-pause': return playback.isPlaying
       ? { icon: 'pause', label: 'Pause', accent: PURPLE }
       : { icon: 'play', label: 'Play', accent: GREEN };

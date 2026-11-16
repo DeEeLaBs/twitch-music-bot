@@ -17,7 +17,7 @@ npm run streamdeck:pack          # from the project root; needs Node 20+
 ```
 
 Then double-click `streamdeck-plugin/release/com.twitchmusicbot.streamDeckPlugin`. The actions appear in the Stream
-Deck app under **Twitch Music Bot**.
+Deck app under **DeEe Bot**.
 
 ### How the plugin gets into the bot
 

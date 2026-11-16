@@ -45,6 +45,26 @@ export const requestsAreOpen = (state: BotState) => state.config.songRequestsOpe
 export const autoplayIsOn = (state: BotState) => state.config.autoPlayRadio !== false;
 
 export const ACTIONS: ActionDefinition[] = [
+  ...(['quiz', 'number', 'word', 'adventure'] as const).map(kind => ({
+    id: `game-start-${kind}`, name: `Spiel starten: ${{quiz:'Quiz',number:'Zahlenraten',word:'Wort erraten',adventure:'Chat-Abenteuer'}[kind]}`, tier: 3 as const,
+    run: async (client: CommandClient) => {
+      const snapshot = await client.post('/api/v1/games/read');
+      if (!snapshot.ok) return fromResult(snapshot);
+      const state = snapshot.data as { startToken?: unknown };
+      if (typeof state?.startToken !== 'string') return fail('Kein gültiges Start-Token vom Bot erhalten.');
+      return fromResult(await client.post('/api/v1/games/start', { kind, startToken: state.startToken }));
+    }
+  })),
+  {
+    id: 'game-finish', name: 'Spiel auswerten', tier: 3,
+    run: async (client: CommandClient) => {
+      const snapshot = await client.post('/api/v1/games/read');
+      if (!snapshot.ok) return fromResult(snapshot);
+      const round = (snapshot.data as { round?: { id?: unknown; phase?: unknown } }).round;
+      if (typeof round?.id !== 'string' || !['running', 'settling'].includes(String(round.phase))) return fail('Keine auswertbare Spielrunde aktiv.');
+      return fromResult(await client.post('/api/v1/games/control', { action: 'finish', roundId: round.id }));
+    }
+  },
   ...(['streamstart', 'subathon'] as const).flatMap(profile => [
     ...(['start', 'pause', 'resume', 'reset'] as const).map(action => ({
       id: `timer-${profile}-${action}`, name: `${profile === 'streamstart' ? 'Streamstart' : 'Subathon'}: ${action}`, tier: 3 as const,

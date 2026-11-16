@@ -53,13 +53,13 @@ const keyAction = action => ({
 });
 const manifest = {
   $schema: 'https://schemas.elgato.com/streamdeck/plugins/manifest.json',
-  Name: 'Twitch Music Bot',
+  Name: 'DeEe Bot',
   Version: `${pkg.version}.0`,
   Author: 'Twitch Music Bot',
   Description: 'Control the Twitch song-request music bot: playback, queue moderation and request switches.',
   UUID: PLUGIN_UUID,
   Icon: 'imgs/plugin-icon',
-  Category: 'Twitch Music Bot',
+  Category: 'DeEe Bot',
   CategoryIcon: 'imgs/category-icon',
   CodePath: 'bin/plugin.js',
   Nodejs: { Version: '20', Debug: 'enabled' },
@@ -82,3 +82,4 @@ const manifest = {
 };
 fs.writeFileSync(path.join(pluginDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 console.log(`Built ${manifest.Actions.length} actions into ${path.relative(process.cwd(), pluginDir) || pluginDir}`);
+

@@ -1,101 +1,77 @@
-# Twitch / YouTube Music Song Request Bot — Version 1.6.0
+# DeEe Bot
 
-Lokales Dashboard, Twitch-Chatbefehle, Songrequest-Warteschlange und OBS-Overlay.
-Ziel: **YouTube Music Desktop App (YTMDesktop) 2.x, Companion API v1**.
-Andere Desktop-Apps mit ähnlichem Namen und Legacy-YTMDesktop 1.x werden nicht unterstützt.
+Ein lokaler Twitch-Musikbot mit Dashboard, Songrequest-Warteschlange, OBS-Overlays und interaktiven Chatspielen. Der Bot läuft auf deinem Rechner und verbindet Twitch mit Spotify, YouTube Music oder NectarLink.
 
-## Spotify Premium + Spotify-Track-Links
+> Aktuelle Projektversion: **1.11.0** · [GitHub-Repository](https://github.com/DeEeLaBs/twitch-music-bot)
 
-Spotify kann jetzt auf zwei Arten genutzt werden: ohne Premium weiterhin als reine Request-Quelle mit YouTube-Music-Fallback, oder mit Premium über die offizielle Spotify-OAuth-/Spotify-Connect-Anbindung. Für Premium wird **kein Client Secret** im Bot benötigt; die Anmeldung nutzt Authorization Code mit PKCE. Trage die Spotify Client ID im Setup ein und registriere `http://127.0.0.1:3000/auth/spotify/callback` als Redirect URI. Der optionale lokale `/spotify/player` nutzt den offiziellen Web Playback SDK und registriert sich als Spotify-Connect-Gerät.
+## Funktionen
 
-Unterstützt werden einzelne Spotify-Track-Links und `spotify:track:...`-URIs. Ist Spotify Premium verbunden und die direkte Spotify-Wiedergabe aktiviert, spielt der Bot diese Requests über ein ausgewähltes Spotify-Connect-Gerät. Ist Spotify nicht verfügbar oder der Fallback aktiviert, wird derselbe Request weiterhin zu YouTube Music aufgelöst. Playlist-/Album-Links werden nicht automatisch als mehrere Requests importiert.
+### Musik und Songrequests
+- Songwünsche per `!sr`, über das Dashboard oder Twitch-Kanalpunkte.
+- Spotify- und YouTube-/YouTube-Music-Links werden unterstützt; bei dienstübergreifenden Links bleibt die Wiedergabe beim ausgewählten Player.
+- Wiedergabe über Spotify Connect, YouTube Music Desktop (YTMDesktop Companion) oder NectarLink.
+- Warteschlange mit Duplikatschutz, Cooldowns, Anfrage-Limits, Sperrlisten, Verlauf, Skip, Pause und Lautstärke-Steuerung.
+- `!playlist` speichert Songs lokal und synchronisiert sie auf Wunsch mit der eingerichteten Spotify-Playlist; offene oder fehlgeschlagene Zuordnungen bleiben sichtbar und können erneut versucht werden.
+- Albumcover, Song-Metadaten und Playerzustand werden für Dashboard und Overlays erfasst.
 
-## Windows: erster Start
+### Dashboard und Desktop-App
+- Lokales Dashboard mit Setup, Diagnose, Chat- und Befehlsverwaltung.
+- Electron-Desktop-App für Windows mit integriertem Hauptfenster und Neustartsteuerung.
+- Stream-Deck-Plugin **DeEe Bot** mit Musik-, Queue-, Countdown- und Chatspiel-Aktionen.
 
-1. Node.js **22 oder neuer** installieren (https://nodejs.org/).
-2. Diese ZIP vollständig in einen eigenen Ordner entpacken. Nicht aus der ZIP starten.
-3. `Installieren.bat` doppelklicken. Sie installiert die Abhängigkeiten anhand der Lockdatei und erstellt den Produktionsbuild. Internet erforderlich.
-4. YTMDesktop öffnen und dort eine normale Musikwiedergabe prüfen.
-5. `Start-Bot.vbs` doppelklicken. Dashboard: **http://127.0.0.1:3000**.
-6. In den Bot-Einstellungen Twitch-Kanal, Bot-Benutzername und Twitch-Chat-OAuth-Token speichern.
-7. YTMDesktop: unter Integrationen den Begleitserver und das zeitweilige Autorisierungsfenster aktivieren.
-8. Im Bot „Neu koppeln“ wählen, Codes vergleichen und in YTMDesktop innerhalb von 30 Sekunden bestätigen. Der Bot speichert und prüft den Token automatisch.
-9. „Diagnose ausführen“ muss eine gültige Autorisierung melden. Danach einen kurzen YouTube-Link anfragen.
+### OBS und Overlays
+- Mehrere unabhängige Overlays mit eigener OBS-Adresse und vollständigem Design.
+- Visueller Overlay-Designer mit frei positionierbaren Widgets, Layouts, Themes, Farben, Cover, Fortschritt, Chat, Begrüßungen und Countdown.
+- Musikplayer-Designs einschließlich **Ashen – Inventar**.
+- Overlay-Ausgabe bleibt unabhängig von der im Designer ausgewählten Szene; mehrere Browserquellen können parallel verschiedene Overlays anzeigen.
+- Zusätzliche OBS-Widgets für Chatspiele, Glücksrad und Begrüßungen.
 
-Die Autorisierung bleibt erforderlich. Das zeitweilige Autorisierungsfenster ist **kein Schalter für einen offenen, tokenlosen Betrieb**.
-Eine weitere Kopplung mit derselben App-ID ersetzt den bisherigen Token. Deshalb nur eine Bot-Instanz koppeln. Ein normaler Neustart ist für sich allein kein Beleg für Tokenablauf.
+### Chatspiele und Stream-Interaktionen
+- **Quiz**, **Zahlenraten**, gemeinsames **Wort-/Galgenraten** und **Chat-Abenteuer**.
+- Spielrunden können im Dashboard oder über Stream-Deck-Tasten gestartet und gesteuert werden.
+- Punkte und Rangliste werden dauerhaft gespeichert; Quiz bietet Kategorien, Fragenkatalog und optionale Joker.
+- Glücksrad mit eigenen Feldern und Farben, Steuerung im Dashboard und Anzeige als Overlay-Widget.
+- Persönliche Zuschauer-Begrüßungen mit unabhängig aktivierbarem Sound, GIF und Chatnachricht.
 
-## Bereits vorhandene Installation übernehmen
+### Countdown und Subathon
+- Streamstart- und Subathon-Timer mit eigenen OBS-Links.
+- Zeitboni und Aktionen für Twitch-Events sowie Spendenanbieter StreamElements, Streamlabs und TipeeeStream.
 
-Alten Bot zuerst beenden. Den bisherigen `data`-Ordner sichern und in den neu entpackten Ordner kopieren; optional auch die `.env` übernehmen. Nicht die alten Quelldateien über die neuen kopieren.
-`data/bot-config.json` hat Vorrang vor `.env`. Ein ungültiger YTM-Token kann mit „Token zurücksetzen“ gelöscht und neu gekoppelt werden.
-Die alte Queue-Datei (Arrayformat) wird gelesen und beim Speichern auf ein Format mit laufendem Request und Verlauf umgestellt. Die Sicherung für einen Rückwechsel behalten.
+## Schnellstart unter Windows
 
-## Start, Stop und OBS
+1. Lade das Projekt als ZIP herunter und entpacke es vollständig in einen eigenen Ordner.
+2. Installiere Node.js **22 oder neuer**.
+3. Starte `Installieren.bat`, um Abhängigkeiten zu installieren und den Produktionsbuild zu erstellen.
+4. Öffne den Bot mit `Start-Bot.vbs` oder `MusicBot starten.cmd`. Das lokale Dashboard ist unter <http://127.0.0.1:3000> erreichbar.
+5. Verbinde Twitch und den gewünschten Musikdienst im Setup und führe anschließend die Diagnose aus.
 
-- `Start-Bot.vbs`: Hintergrundstart mit Bereitschaftsprüfung, öffnet Browser.
-- `Start-Bot.bat`: sichtbarer Start für Fehlersuche; Strg+C beendet den Terminalbetrieb.
-- `Stop-Bot.bat`: beendet nur den vom Hintergrundlauncher erfassten, passenden Node-Prozess.
-- `Autostart-Einrichten.bat` / `Autostart-Entfernen.bat`: Windows-Autostart verwalten.
-- Hintergrund-Startprotokolle: `data/bot.log`, `data/bot-error.log`.
-- OBS-Browserquelle: Im **Overlay-Designer** Theme, Layout und Inhalte auswählen, dann die erzeugte URL kopieren. Die empfohlenen Abmessungen werden passend zum Layout angezeigt.
-- Alternative: **http://127.0.0.1:3000/overlay/standalone**.
-- Port 3000 ist fest. Der Bot ist nur auf dem eigenen Rechner erreichbar.
-
-## Dashboard und Overlay-Designer
-
-Das Dashboard ist für Desktop, Tablet und Smartphone responsiv. Die Hauptnavigation lässt sich mit Tab sowie den Pfeiltasten bedienen; sichtbare Fokusmarkierungen, Statusmeldungen für Screenreader, größere Klickflächen, ein Sprunglink und reduzierte Animationen sind eingebaut.
-
-Der OBS-Designer enthält acht Themes (**Glass, Neon, Minimal, Light, Ocean, Sunset, Twitch und Hoher Kontrast**) sowie drei Layouts (**Horizontal, Kompakt und Gestapelt**). Cover, Fortschritt, wünschende Person und Zeit lassen sich einzeln ein- oder ausblenden. Akzentfarbe, Skalierung und Eckenradius sind einstellbar und werden in der OBS-URL gespeichert. Die zuletzt gewählten Optionen bleiben im Browser erhalten.
-
-Alle Skripte müssen im vollständigen Projektordner bleiben. Der Launcher ist für Windows; der Node-Server kann auch auf anderen Plattformen laufen.
+Für YouTube Music wird **YTMDesktop 2.x mit Companion API v1** benötigt. Ältere YTMDesktop-1.x-Versionen werden nicht unterstützt. Für Spotify-Wiedergabe wird ein Spotify-Premium-Konto mit Spotify Connect benötigt; Spotify-Links können auch als Requestquelle mit YouTube-Music-Wiedergabe genutzt werden.
 
 ## Chatbefehle
 
-| Befehl | Berechtigung |
-| --- | --- |
-| `!sr <Titel, YouTube- oder Spotify-Track-Link>` / `!songrequest` | alle |
-| `!np`, `!song`, `!current` | alle |
-| `!queue`, `!voteskip`, `!help` | alle |
-| `!skip`, `!veto <Position oder Titel>`, `!clearqueue` | Mod / Streamer |
-| `!pause`, `!resume`, `!vol 0` bis `!vol 100` | Mod / Streamer |
-| `!blacklist add <Begriff>`, `!blacklist remove <Begriff>` | Mod / Streamer |
+| Befehl | Zugriff | Funktion |
+|---|---|---|
+| `!sr <Titel oder Link>` | alle | Song zur Warteschlange hinzufügen |
+| `!np`, `!song` | alle | aktuell laufenden Song anzeigen |
+| `!queue` | alle | Warteschlange anzeigen |
+| `!playlist` | alle, gemäß Konfiguration | Song für die Spotify-Playlist vormerken/synchronisieren |
+| `!play <Antwort>` | alle während einer Spielrunde | beim aktiven Chatspiel mitspielen |
+| `!points`, `!points top` | alle | Spielpunkte und Rangliste anzeigen |
+| `!skip`, `!pause`, `!resume`, `!vol <0–100>` | Mods/Streamer | Wiedergabe steuern |
+| `!veto <Position oder Titel>`, `!clearqueue` | Mods/Streamer | Queue moderieren |
+| `!blacklist add/remove <Begriff>` | Mods/Streamer | Songfilter verwalten |
 
-Kanalpunkte sind standardmäßig deaktiviert. Nach Eingabe der Twitch-Daten kann der Bot die vorhandenen Rewards automatisch laden. Mit einem Token mit `channel:manage:redemptions` kann er auf Wunsch auch eine passende Songrequest-Belohnung erstellen. Der ausgewählte Reward wird regelmäßig validiert; gelöschte, deaktivierte oder falsch konfigurierte Rewards erscheinen in der Diagnose. Diese Version verarbeitet über Twitch-Chat übermittelte Einlösungen mit Texteingabe. Eine automatische Rückerstattung von Kanalpunkten ist nicht enthalten.
+Konkrete Berechtigungen, Aliase, Cooldowns und Limits sind im Dashboard konfigurierbar. Die Spielstartbefehle für Mods sind im Bereich „Commands“ aufgeführt.
 
-Requests haben standardmäßig maximal sieben Minuten und mindestens 20 Sekunden; maximal zwei aktive Requests je Zuschauer einschließlich laufendem Song. Moderatoren sind vom persönlichen Limit ausgenommen. Queue-Größe, Mindestdauer, Wiederholungsfenster, Benutzer-/Global-Cooldown sowie Berechtigungen und Cooldowns einzelner Befehle sind in den Einstellungen konfigurierbar. Zuschauer können für Requests gesperrt und ihre offenen Requests gesammelt entfernt werden.
+## Daten und Sicherheit
 
-## Verhalten bei Fehlern
+Der Server bindet standardmäßig nur an `127.0.0.1`; das Dashboard ist lokal erreichbar. Ändernde API-Aufrufe benötigen eine lokale Sitzung. Zugriffstokens werden getrennt von der normalen Konfiguration gespeichert und unter Windows mit DPAPI geschützt. Nutzdaten wie Warteschlange, Spieleinstellungen und Overlays liegen lokal im Ordner `data`; sichere diesen Ordner vor manuellen Updates.
 
-- Ein Request wird erst nach passender Player-ID und bestätigter Wiedergabe als gestartet übernommen.
-- Bei nicht bestätigtem Start bleibt der Request erhalten. Dashboard zeigt den Fehler. Mit „Nächsten Request starten / erneut versuchen“ erneut starten oder Song aus der Queue entfernen.
-- Requests werden bei Fehlern nicht endlos automatisch wiederholt.
-- Bei Neustart wird ein weiterhin passender Player-Song dem bisherigen Anfragenden zugeordnet. Hat der Player gewechselt, bleibt der alte Request zur manuellen Fortsetzung erhalten.
-- Simulation ist ausschließlich ein ausdrücklich eingeschalteter Testmodus und ersetzt keine fehlgeschlagene echte Verbindung.
-- Dashboard und Overlay verbinden sich nach Abbrüchen automatisch neu.
-- Zugriffstokens stehen nicht mehr im normalen `bot-config.json`. Unter Windows werden sie benutzergebunden mit DPAPI verschlüsselt in `data/secrets.json` gespeichert; auf anderen Plattformen nutzt der Bot eine lokale AES-GCM-Schlüsseldatei. Tokens werden nicht an Dashboard/OBS oder Diagnoseantworten übertragen. Leere Tokenfelder behalten den vorhandenen Wert bei.
-- Vor atomaren JSON-Updates wird eine `.backup`-Datei angelegt. Eine beschädigte Hauptkonfiguration kann beim Start aus dem Backup wiederhergestellt werden.
-- Ändernde REST-Aufrufe benötigen zusätzlich eine lokale Sitzungskennung; `/api/v1/...` ist die versionierte API, `/api/...` bleibt kompatibel.
+Der Bot lädt keine Musik herunter und umgeht keine Zugriffsbeschränkungen der Anbieter. Externe Dienste können APIs, Metadaten oder Verfügbarkeit ändern; Diagnose und Fehlermeldungen zeigen solche Ausfälle an.
 
-## Grenzen und lokale Abschlussprüfung
+## Entwicklung und Prüfung
 
-Bei Textanfragen sucht der Bot zuerst gezielt in YouTube Music nach einem Treffer aus der Kategorie „Songs/Titel“. Nur wenn dort kein brauchbarer Song gefunden wird, verwendet er die normale YouTube-Videosuche als Fallback. Videodauer und Metadaten werden weiterhin aus öffentlichen YouTube-/YouTube-Music-Antworten gelesen. YouTube kann diese Antworten ändern oder Zugriffe blockieren. Dann wird eine Fehlermeldung statt eines erfundenen Songs geliefert. Direkte Links sind ebenfalls auf abrufbare Metadaten angewiesen. Blacklist prüft Metadaten, nicht den Audioinhalt.
-
-Autoplay verwendet die bereits vorhandene YTM-Wiedergabe; der Bot erzeugt keine eigene Radio-Playlist. Bei deaktiviertem Autoplay wird nach einem Request-Ende pausiert. Werbung und YTM-Ladeverzögerungen können Starts verzögern.
-
-Vor dem ersten Livestream lokal prüfen: koppeln → Diagnose → zwei kurze Requests → Pause/Resume → Lautstärke 0 → Vote-Skip → Bot-Neustart → OBS-Reconnect. Windows-Launcher und echte Twitch-/YTM-Verbindungen konnten in der Entwicklungsumgebung nicht Ende zu Ende getestet werden.
-
-## Erweiterte Funktionen ab 1.4.0
-
-- **Song-Suche:** YouTube Music bleibt erste Quelle. Treffer werden nach Titel/Künstler gewichtet; Live-, Cover-, Karaoke-, Remix-, Sped-up- und ähnliche Varianten werden bei normalen Anfragen abgewertet. Erfolgreiche Treffer werden optional persistent gecacht, fehlgeschlagene Suchen kurz negativ gecacht und identische parallele Suchen zusammengefasst. Circuit Breaker verhindern aggressives Wiederholen bei externen Ausfällen.
-- **Warteschlange:** Drag & Drop plus tastaturbedienbare Hoch/Runter-Schaltflächen, Gesamtlimit, Mindestdauer, Wiederholungsfenster und Requester-Verwaltung.
-- **OBS:** Presets können angewendet, als JSON exportiert und wieder importiert werden. `/overlay/standalone` verwendet dieselbe Overlay-Implementierung wie `/overlay`, damit kein doppelter Overlay-Code auseinanderläuft.
-- **Diagnose:** Systemstatus für Twitch, YTM, Suche, Secrets, Persistenz, Channel Points und lokale Plugins. Der Diagnoseexport enthält absichtlich keine Zugriffstokens. Strukturierte Logs rotieren bei ca. 5 MB.
-- **WebSocket:** Heartbeat entfernt tote Browser-/OBS-Verbindungen; Queue-Änderungen werden getrennt von anderen State-Patches übertragen.
-- **Plugins:** Der Ordner `plugins/` enthält ein bewusst kleines lokales Plugin-Grundgerüst. Nur selbst geprüfte lokale Plugins verwenden – Plugin-Code läuft mit den Rechten des Bots.
-- **Frontend:** Fehlergrenze verhindert bei einem Komponentenfehler eine vollständig weiße Oberfläche; größere Bereiche werden lazy geladen.
-
-## Entwicklung und Tests
+Voraussetzung: Node.js 22+.
 
 ```sh
 npm ci
@@ -103,52 +79,10 @@ npm run lint
 npm test
 npm run build
 npm run test:smoke
-npm start
 ```
 
-`npm run dev` startet den Entwicklungsserver. `npm start` verwendet den Produktionsbuild. Nach Quellcodeänderungen erneut bauen.
-`npm run desktop` (und `MusicBot starten.cmd`) startet den Produktionsbuild und baut nur bei geänderten Quellen neu (ca. 5 s); `npm run desktop:dev` startet stattdessen den Entwicklungsserver mit Hot-Reload.
-Die Tests verwenden kontrollierte Player-/HTTP-Antworten für Autorisierung, Queue-Übergänge, Suche und Fehlerfälle; sie sind kein Ersatz für den lokalen Test mit den echten Apps.
+`npm run dev` startet den Entwicklungsserver mit Hot Reload. Stream-Deck-Plugin bauen und bereitstellen: `npm run streamdeck:pack`. Weitere Anleitungen stehen in [`docs/`](docs/) und [`streamdeck-plugin/README.md`](streamdeck-plugin/README.md).
 
-API-Referenz: https://github.com/ytmdesktop/ytmdesktop/wiki/v2-%E2%80%90-Companion-Server-API-v1
+## Projektstand
 
-## Twitch-Kanalpunkte-Songrequests
-
-In **Setup & Einstellungen** kann die Funktion **Songrequests über Twitch-Kanalpunkte** aktiviert werden. Nach dem Speichern von Twitch-Kanal und OAuth-Token lädt der Bot die verfügbaren Kanalpunkte-Belohnungen automatisch und zeigt sie in einer Auswahlliste an. Eine manuelle Reward-ID ist nicht mehr nötig.
-
-Der verwendete Twitch-Token muss zum Broadcaster-Konto gehören und zusätzlich zu `chat:read` und `chat:edit` die Berechtigung `channel:read:redemptions` enthalten. Für Songwünsche sollte die ausgewählte Belohnung die Texteingabe durch Zuschauer verlangen.
-
-
-## Hinweis zu v1.4.2
-Neue Twitch- und YouTube-Music-Tokens werden ohne PowerShell-/ProtectedData-Abhängigkeit mit AES-256-GCM gespeichert. Bei einem Update bitte `Installieren.bat` einmal ausführen; dabei wird ein alter Produktions-Build entfernt und neu erstellt.
-
-## Hinweis zu v1.4.3
-Der YTM-Status in der Kopfzeile wird jetzt über echte Verbindungsereignisse synchronisiert. Nach erfolgreichem Pairing bzw. erfolgreicher Zustandsabfrage wechselt der Chip sofort auf „Verbunden“; bei einer Trennung wieder auf „Nicht verbunden“.
-
-
-## Overlay Studio v1.6.0
-Der Editor unterstützt Profile, freie Positionierung per Drag & Drop, eigene Hintergrundbilder/Logos, Requester-Avatar/Badges und optionales Custom CSS. Hochgeladene Bilder werden lokal in `data/overlay-assets` gespeichert.
-
-## Architektur ab v1.7.0
-
-Die API ist in kleinere Router aufgeteilt (`src/server/routes`), Twitch-Command-Metadaten und Chat-Übersetzungen liegen zentral in `commandRegistry.ts` und `twitchMessages.ts`, und die Frontend-State/WebSocket-Logik befindet sich in `src/hooks/useBotState.ts`. Der YTM-Companion besitzt zusätzlich einen zentralen Command-Scheduler, der parallele Steuerbefehle serialisiert und schnelle Lautstärkeänderungen zusammenführt.
-
-## Spotify-Wiedergabe
-
-Die Spotify-Anmeldung erfolgt im Setup per OAuth. Bei ausgewähltem Spotify-Player laufen Songrequests über Spotify Connect beziehungsweise den eingebetteten Spotify-Webplayer. Der frühere separate Spotify-SDK-Tab wird nicht mehr verwendet.
-
-## Startverhalten ab v1.8.4
-`MusicBot starten.cmd` ist der zentrale Einstiegspunkt. Der Starter prüft bzw. startet zuerst den lokalen Server auf `127.0.0.1:3000`, wartet auf `/api/health` und öffnet erst danach die Desktop-Oberfläche. Das Dashboard ist die Standardansicht; YouTube Music und Spotify werden im Web-Player-Bereich entsprechend der aktiven Player-Auswahl angezeigt.
-
-Bei einem fehlgeschlagenen Start stehen die Prozessausgaben unter `data/server-stderr.log` und `data/server-stdout.log`.
-
-## Stream Deck
-Das Setup enthält die Karte **Elgato Stream Deck**: Ein Klick öffnet das mitgelieferte Plugin in der Stream-Deck-App (diese fragt nach der Bestätigung); bei einer neueren Plugin-Version erscheint „Update verfügbar“. Das Plugin wird mit `npm run streamdeck:pack` bzw. automatisch von `npm run build:standalone` gebaut. Details: `streamdeck-plugin/README.md`.
-
-## Countdown Studio
-
-Der neue Dashboard-Bereich **Countdown** verwaltet Streamstart und Subathon mit
-eigenen OBS-Links, Zeitboni, Pausen, Zeitgrenzen und Abschlussaktionen. Subs,
-Geschenk-Abos, Bits, Kanalpunkte und Spenden über StreamElements, Streamlabs und
-TipeeeStream können die Zeit verlängern. Regeln, Anbieter und Gestaltung werden
-im Menü eingestellt. Anleitung und Grenzen: [docs/COUNTDOWN.md](docs/COUNTDOWN.md).
+Der Quellcode und die Funktionen sind in aktiver Entwicklung. Verbindungen zu Twitch, Spotify, YouTube Music, NectarLink, OBS und Stream Deck sollten vor einem Livestream lokal mit den eigenen Konten und Geräten getestet werden.

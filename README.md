@@ -2,110 +2,103 @@
 
 <img src="public/favicon.svg" alt="" width="40">
 
-DeEe Bot hilft Twitch-Streamern, Songwünsche zu verwalten, OBS-Szenen zu gestalten und den Chat direkt ins Streamgeschehen einzubinden.
+DeEe Bot helps Twitch streamers manage song requests, design OBS overlays, and let viewers join in through chat.
 
-**[Releases](https://github.com/DeEeLaBs/twitch-music-bot/releases) · [Schnellstart](#schnellstart) · [Funktionen](#funktionen)**
+**[Releases](https://github.com/DeEeLaBs/twitch-music-bot/releases) · [Quick start](#quick-start) · [Features](#features)**
 
-![Testansicht des OBS-Musikplayers mit kompaktem, horizontalem und gestapeltem Layout sowie Banner](docs/reports/waveform-layouts.png)
+![OBS music player preview showing compact, horizontal, stacked, and banner layouts](docs/reports/waveform-layouts.png)
 
-*Musikplayer-Layouts mit Beispieldaten aus der Projektvorschau.*
+*Music player layouts shown with sample data.*
 
-## Funktionen
+## Features
 
-### Musik und Songrequests
+### Music and song requests
 
-Ein Zuschauer wünscht sich per `!sr <Link>` einen Song. Du behältst im Dashboard die Warteschlange im Blick und kannst den laufenden Titel mit `!playlist` für deine Spotify-Playlist vormerken.
-- Songwünsche per `!sr`, über das Dashboard oder Twitch-Kanalpunkte.
-- Spotify- und YouTube-/YouTube-Music-Links werden unterstützt; bei dienstübergreifenden Links bleibt die Wiedergabe beim ausgewählten Player.
-- Wiedergabe über Spotify Connect, YouTube Music Desktop (YTMDesktop Companion) oder NectarLink.
-- Warteschlange mit Duplikatschutz, Cooldowns, Anfrage-Limits, Sperrlisten, Verlauf, Skip, Pause und Lautstärke-Steuerung.
-- `!playlist` speichert Songs lokal und synchronisiert sie auf Wunsch mit der eingerichteten Spotify-Playlist; offene oder fehlgeschlagene Zuordnungen bleiben sichtbar und können erneut versucht werden.
-- Albumcover, Song-Metadaten und Playerzustand werden für Dashboard und Overlays erfasst.
+Viewers can request songs with `!sr <link>`, through Twitch Channel Points when enabled, or via requests added by the streamer in the dashboard. Spotify and YouTube links can be matched on the selected playback service without switching players.
 
-### OBS und Overlays
+- Play music through Spotify Connect, the embedded YouTube Music player, or YTMDesktop Companion. The current source also includes NectarLink integration.
+- Manage the queue with playback controls, request history, duplicate protection, cooldowns, limits, and blocklists.
+- Save the current track locally with `!playlist` and sync it to a configured Spotify playlist. Unresolved or failed entries can be retried.
 
-Gestalte ein Intro mit Countdown und eine Gameplay-Szene mit Musikplayer und Chat. Beide Overlays erhalten eine eigene OBS-Adresse und können gleichzeitig geladen sein.
+### OBS overlays and alerts
 
-- Alert-Designer für Ereignisse wie Follows, Subs und Bits.
-- Mehrere unabhängige Overlays mit eigener OBS-Adresse und vollständigem Design.
-- Visueller Overlay-Designer mit frei positionierbaren Widgets, Layouts, Themes, Farben, Cover, Fortschritt, Chat, Begrüßungen und Countdown.
-- Musikplayer-Designs einschließlich **Ashen – Inventar**.
-- Overlay-Ausgabe bleibt unabhängig von der im Designer ausgewählten Szene; mehrere Browserquellen können parallel verschiedene Overlays anzeigen.
-- Zusätzliche OBS-Widgets für Chatspiele, Glücksrad und Begrüßungen.
+Build a countdown for your intro and a separate music-and-chat overlay for gameplay. Each overlay has its own OBS browser source URL and can run alongside the others.
 
-### Chatspiele und Stream-Interaktionen
+- Arrange widgets in the visual editor and customize themes, layouts, colors, album art, and progress indicators. Music player styles include **Ashen – Inventory** in the current source.
+- Create alerts for events such as follows, subscriptions, and Bits.
+- Welcome individual viewers with a sound, GIF, or chat message.
 
-Starte zwischen zwei Matches ein Quiz. Zuschauer antworten im Chat, während OBS Frage und Ergebnis zeigt.
-- **Quiz**, **Zahlenraten**, gemeinsames **Wort-/Galgenraten** und **Chat-Abenteuer**.
-- Spielrunden können im Dashboard oder über Stream-Deck-Tasten gestartet und gesteuert werden.
-- Punkte und Rangliste werden dauerhaft gespeichert; Quiz bietet Kategorien, Fragenkatalog und optionale Joker.
-- Glücksrad mit eigenen Feldern und Farben, Steuerung im Dashboard und Anzeige als Overlay-Widget.
-- Persönliche Zuschauer-Begrüßungen mit unabhängig aktivierbarem Sound, GIF und Chatnachricht.
+### Chat games and viewer interaction
 
-### Stream steuern
+Start a quiz between matches. Viewers answer in chat while OBS shows the question and result.
 
-Starte vor dem Stream den Countdown und lasse beim Subathon etwa ein Geschenk-Abo die Restzeit verlängern. Wiederkehrende Aktionen kannst du auf Stream-Deck-Tasten legen.
+- Play quizzes, number guessing, cooperative word guessing, and branching chat adventures. Supported games save scores and leaderboards.
+- Browse quiz questions by category and use optional lifelines.
+- Configure a prize wheel with custom labels and colors, then display it in OBS.
 
-- Streamstart- und Subathon-Timer mit eigenen OBS-Links.
-- Zeitboni und Aktionen für Twitch-Events sowie Spendenanbieter StreamElements, Streamlabs und TipeeeStream.
-- Lokales Dashboard für Einrichtung, Diagnose und Chatbefehle sowie eine Windows-Desktop-App.
-- Stream-Deck-Plugin **DeEe Bot** für Musik, Warteschlange, Timer und Chatspiele im aktuellen Quellcode.
+### Stream controls
 
-## Schnellstart
+- Run stream-start and subathon countdowns with dedicated OBS URLs. Configure time bonuses for Twitch events and donations from StreamElements, Streamlabs, or TipeeeStream.
+- Use the local dashboard or Windows desktop app for setup, diagnostics, and chat commands.
+- Put playback, queue, countdown, and chat game controls on your Stream Deck with the **DeEe Bot** plugin in the current source.
 
-### Windows-Download
+## Quick start
 
-Der zuletzt veröffentlichte [Windows-Release v1.10.0](https://github.com/DeEeLaBs/twitch-music-bot/releases/tag/v1.10.0) enthält unter anderem mehrere OBS-Overlays, persönliche Begrüßungen, Spotify-Playlist-Sync und dienstübergreifende Songlinks. Chatspiele, Glücksrad, NectarLink und die neuen Stream-Deck-Spieltasten gehören zum neueren Quellcode.
+### Portable Windows download
 
-1. Lade `MusicBot-1.10.0-Windows-x64-Portable.zip` auf der Release-Seite herunter und entpacke das Archiv vollständig.
-2. Starte `Portable/MusicBot.exe`. Node.js und Electron sind im Paket enthalten. Internet und die jeweiligen Dienstkonten sind erforderlich.
-3. Verbinde Twitch und den gewünschten Musikdienst unter **Setup**. Für Spotify Connect brauchst du Spotify Premium und eine Spotify-Client-ID.
-4. Kopiere im **Overlay-Designer** die OBS-URL des gewünschten Overlays und füge sie in OBS als **Browserquelle** hinzu.
+The [v1.10.0 Windows release](https://github.com/DeEeLaBs/twitch-music-bot/releases/tag/v1.10.0) includes multiple OBS overlays, personal greetings, Spotify playlist sync, and cross-service song links. Chat games, the prize wheel, NectarLink, and Stream Deck game controls are part of the newer source code.
 
-Details zur Einrichtung und zur Datenübernahme stehen in der [Windows-Anleitung](docs/STANDALONE.md).
+1. Download `MusicBot-1.10.0-Windows-x64-Portable.zip` from the release page and extract the entire archive.
+2. Launch `Portable/MusicBot.exe`. Node.js and Electron are included. You need internet access and accounts for the services you connect.
+3. Open **Setup** and connect Twitch and your music service. Spotify Connect requires Spotify Premium and a Spotify client ID.
+4. In the **Overlay Designer**, copy the URL for the overlay you want and add it to OBS as a **Browser Source**.
 
-### Aktueller Quellcode (1.11.0)
+See the [Windows setup guide](docs/STANDALONE.md) for installation and data migration.
 
-1. Lade das Projekt als ZIP herunter und entpacke es vollständig in einen eigenen Ordner.
-2. Installiere Node.js **22 oder neuer**.
-3. Starte `Installieren.bat`, um Abhängigkeiten zu installieren und den Produktionsbuild zu erstellen.
-4. Öffne den Bot mit `MusicBot starten.cmd`. Das lokale Dashboard ist unter <http://127.0.0.1:3000> erreichbar.
-5. Verbinde Twitch und den gewünschten Musikdienst im Setup und führe anschließend die Diagnose aus.
+### Run the current source (1.11.0)
 
-YouTube Music kann über den eingebetteten Player laufen. Für die separate YTMDesktop-Anbindung brauchst du **YTMDesktop 2.x mit Companion API v1**.
+1. Clone the repository or download and extract the ZIP for the `main` branch.
+2. Install Node.js **22 or later**.
+3. On Windows, run `Installieren.bat` to install dependencies and build the app.
+4. Launch `MusicBot starten.cmd` and open the dashboard at <http://127.0.0.1:3000>.
+5. Connect Twitch and your music service in **Setup**, then run diagnostics.
 
-## Anleitungen
+YouTube Music can run in the embedded player. If you use the separate YTMDesktop integration, it requires **YTMDesktop 2.x with Companion API v1**.
 
-- [Mehrere OBS-Overlays](docs/MULTI_OVERLAYS.md) und [persönliche Begrüßungen](docs/GREETINGS.md)
-- [Dienstübergreifende Songlinks](docs/CROSS_SERVICE_REQUESTS.md) und [Spotify-Playlist](docs/SPOTIFY_STREAM_PLAYLIST.md)
-- [Chatspiele](docs/CHAT-GAMES.md), [Glücksrad](docs/WHEEL.md) und [Countdown und Subathon](docs/COUNTDOWN.md)
-- [Stream-Deck-Plugin](streamdeck-plugin/README.md)
+## Guides
 
-## Chatbefehle
+Some guides are written in German.
 
-| Befehl | Zugriff | Funktion |
+- [Multiple OBS overlays](docs/MULTI_OVERLAYS.md) and [personal greetings](docs/GREETINGS.md)
+- [Cross-service song requests](docs/CROSS_SERVICE_REQUESTS.md) and [Spotify playlist sync](docs/SPOTIFY_STREAM_PLAYLIST.md)
+- [Chat games](docs/CHAT-GAMES.md), [prize wheel](docs/WHEEL.md), and [countdowns and subathons](docs/COUNTDOWN.md)
+- [Stream Deck plugin](streamdeck-plugin/README.md)
+
+## Chat commands
+
+| Command | Access | What it does |
 |---|---|---|
-| `!sr <Titel oder Link>` | alle | Song zur Warteschlange hinzufügen |
-| `!np`, `!song` | alle | aktuell laufenden Song anzeigen |
-| `!queue` | alle | Warteschlange anzeigen |
-| `!playlist` | alle, gemäß Konfiguration | Song für die Spotify-Playlist vormerken/synchronisieren |
-| `!play <Antwort>` | alle während einer Spielrunde | beim aktiven Chatspiel mitspielen |
-| `!points`, `!points top` | alle | Spielpunkte und Rangliste anzeigen |
-| `!skip`, `!pause`, `!resume`, `!vol <0–100>` | Mods/Streamer | Wiedergabe steuern |
-| `!veto <Position oder Titel>`, `!clearqueue` | Mods/Streamer | Queue moderieren |
-| `!blacklist add/remove <Begriff>` | Mods/Streamer | Songfilter verwalten |
+| `!sr <title or link>` | Everyone | Request a song |
+| `!np`, `!song` | Everyone | Show the current song |
+| `!queue` | Everyone | Show the queue |
+| `!playlist` | Configurable | Save the current song and sync it if configured |
+| `!play <answer>` | During a game | Join the active round |
+| `!points`, `!points top` | Everyone | Show scores and the leaderboard |
+| `!skip`, `!pause`, `!resume`, `!vol <0–100>` | Moderators and streamer | Control playback |
+| `!veto <position or title>`, `!clearqueue` | Moderators and streamer | Moderate the queue |
+| `!blacklist add/remove <term>` | Moderators and streamer | Manage song filters |
 
-Konkrete Berechtigungen, Aliase, Cooldowns und Limits sind im Dashboard konfigurierbar. Die Spielstartbefehle für Mods sind im Bereich „Commands“ aufgeführt.
+Change command permissions, aliases, cooldowns, and limits in the dashboard. The **Commands** section lists game controls available to moderators.
 
-## Daten und Sicherheit
+## Local data and security
 
-Der Server bindet standardmäßig nur an `127.0.0.1`; das Dashboard ist lokal erreichbar. Ändernde API-Aufrufe benötigen eine lokale Sitzung. Zugriffstokens werden getrennt von der normalen Konfiguration gespeichert und unter Windows mit DPAPI geschützt. Nutzdaten wie Warteschlange, Spieleinstellungen und Overlays liegen lokal im Ordner `data`; sichere diesen Ordner vor manuellen Updates.
+The dashboard listens on `127.0.0.1` by default. API actions that change data require a local session. Access tokens are stored separately from standard settings and protected by DPAPI on Windows. Back up the local `data` folder before updating.
 
-Der Bot lädt keine Musik herunter und umgeht keine Zugriffsbeschränkungen der Anbieter. Externe Dienste können APIs, Metadaten oder Verfügbarkeit ändern; Diagnose und Fehlermeldungen zeigen solche Ausfälle an.
+Test Twitch, your music service, OBS, and Stream Deck with your own setup before going live. Diagnostics can help identify connection problems.
 
-## Entwicklung und Prüfung
+## Development
 
-Voraussetzung: Node.js 22+.
+The project uses TypeScript, React, Node.js, and Electron. Use Node.js 22 or later.
 
 ```sh
 npm ci
@@ -115,8 +108,4 @@ npm run build
 npm run test:smoke
 ```
 
-`npm run dev` startet den Entwicklungsserver mit Hot Reload. Stream-Deck-Plugin bauen und bereitstellen: `npm run streamdeck:pack`. Weitere Anleitungen stehen in [`docs/`](docs/) und [`streamdeck-plugin/README.md`](streamdeck-plugin/README.md).
-
-## Projektstand
-
-Der Quellcode und die Funktionen sind in aktiver Entwicklung. Verbindungen zu Twitch, Spotify, YouTube Music, NectarLink, OBS und Stream Deck sollten vor einem Livestream lokal mit den eigenen Konten und Geräten getestet werden.
+Run `npm run dev` for hot reload or `npm run streamdeck:pack` to package the Stream Deck plugin.
